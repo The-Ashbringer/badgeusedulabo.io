@@ -1,67 +1,80 @@
 
 -- =====================================================
 -- BADGEUSE TWITCH
--- Migration initiale
+-- Migration initiale de la base D1
 -- =====================================================
 
--- Comptes Twitch connus
+PRAGMA foreign_keys = ON;
+
+
+-- -----------------------------------------------------
+-- UTILISATEURS TWITCH
+-- -----------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS users (
     twitch_user_id TEXT PRIMARY KEY,
+
     twitch_login TEXT NOT NULL,
     display_name TEXT NOT NULL,
     profile_image_url TEXT,
-    created_at TEXT NOT NULL DEFAULT (
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    ),
-    updated_at TEXT NOT NULL DEFAULT (
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    )
+
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Historique des badges
+
+CREATE INDEX IF NOT EXISTS idx_users_login
+ON users(twitch_login COLLATE NOCASE);
+
+
+-- -----------------------------------------------------
+-- BADGES QUOTIDIENS
+-- -----------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS badges (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     twitch_user_id TEXT NOT NULL,
-
-    -- Date au format YYYY-MM-DD
-    -- Calculée côté Worker avec Europe/Paris
     badge_date TEXT NOT NULL,
-
-    -- Heure au format HH:MM:SS
     badge_time TEXT NOT NULL,
 
-    -- Ligne correspondante dans Google Sheets
     sheet_row INTEGER,
 
-    -- pending : écriture en cours
-    -- recorded : écriture confirmée
-    -- failed : échec à traiter
     status TEXT NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'recorded', 'failed')),
+        CHECK (
+            status IN ('pending', 'recorded', 'failed')
+        ),
 
-    created_at TEXT NOT NULL DEFAULT (
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    ),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
 
-    updated_at TEXT NOT NULL DEFAULT (
-        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    ),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     FOREIGN KEY (twitch_user_id)
         REFERENCES users(twitch_user_id)
-        ON DELETE RESTRICT,
+        ON DELETE CASCADE,
 
-    -- Un seul badge par compte et par journée
     UNIQUE (twitch_user_id, badge_date)
 );
 
--- Accélère la consultation de l'historique
+
+-- -----------------------------------------------------
+-- INDEX DE PERFORMANCE
+-- -----------------------------------------------------
+
 CREATE INDEX IF NOT EXISTS idx_badges_date
 ON badges(badge_date);
+
 
 CREATE INDEX IF NOT EXISTS idx_badges_user
 ON badges(twitch_user_id);
 
+
 CREATE INDEX IF NOT EXISTS idx_badges_status
 ON badges(status);
+
+
+CREATE INDEX IF NOT EXISTS idx_badges_pending
+ON badges(status, badge_date)
+WHERE status IN ('pending', 'failed');
