@@ -1,308 +1,278 @@
 
-/**
- * BADGEUSE DU LABO
- * Cloudflare Worker - API principale
- *
- * Fichier : backend/src/index.js
- */
-
 import {
-    handleAuthStart,
-    handleAuthCallback,
-    handleLogout,
-    getSession
+  handleAuthStart,
+  handleAuthCallback,
+  handleLogout,
+  getSession
 } from "./auth.js";
 
 import {
-    getBadgeStatus,
-    recordBadge
+  upsertUser,
+  getBadgeStatus,
+  reserveBadge,
+  markBadgeRecorded,
+  markBadgeFailed
+} from "./database.js";
+
+import {
+  getPlanning,
+  recordBadge
 } from "./google-sheets.js";
 
 
-/* ========================================
-   CONFIGURATION
-======================================== */
-
-const API_VERSION = "1.0.0";
-
-
-/* ========================================
-   REPONSES HTTP
-======================================== */
-
-function jsonResponse(data, status = 200, headers = {}) {
-    return new Response(JSON.stringify(data), {
-        status,
-        headers: {
-            "Content-Type": "application/json; charset=utf-8",
-            "Cache-Control": "no-store",
-            ...headers
-        }
-    });
-}
-
-
-function errorResponse(message, status = 400, code = "ERROR") {
-    return jsonResponse({
-        success: false,
-        code,
-        message
-    }, status);
-}
-
-
-/* ========================================
-   CORS
-======================================== */
-
 function getCorsHeaders(request, env) {
-    const origin = request.headers.get("Origin");
+  const requestOrigin = request.headers.get("Origin");
 
-    const allowedOrigin = env.FRONTEND_URL;
+  let allowedOrigin = "";
 
-    // Pas d'accès depuis une origine inconnue.
-    if (!origin || origin !== allowedOrigin) {
-        return {};
-    }
+  try {
+    allowedOrigin = new URL(env.FRONTEND_URL).origin;
+  } catch {
+    allowedOrigin = env.FRONTEND_URL;
+  }
 
-    return {
-        "Access-Control-Allow-Origin": allowedOrigin,
-        "Access-Control-Allow-Credentials": "true",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-        "Access-Control-Max-Age": "86400",
-        "Vary": "Origin"
-    };
+  const headers = {
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Credentials": "true",
+    "Vary": "Origin"
+  };
+
+  if (requestOrigin === allowedOrigin) {
+    headers["Access-Control-Allow-Origin"] = allowedOrigin;
+  }
+
+  return headers;
 }
 
 
-function withCors(response, request, env) {
-    const headers = new Headers(response.headers);
-    const corsHeaders = getCorsHeaders(request, env);
-
-    for (const [key, value] of Object.entries(corsHeaders)) {
-        headers.set(key, value);
+function jsonResponse(data, status = 200, corsHeaders = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      ...corsHeaders
     }
-
-    return new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers
-    });
+  });
 }
 
-
-/* ========================================
-   DATE ET HEURE FRANCAISES
-======================================== */
 
 function getParisDate() {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Europe/Paris",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit"
-    }).formatToParts(new Date());
-
-    const values = Object.fromEntries(
-        parts.map(part => [part.type, part.value])
-    );
-
-    return `${values.year}-${values.month}-${values.day}`;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Paris",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(new Date());
 }
 
 
 function getParisTime() {
-    return new Intl.DateTimeFormat("fr-FR", {
-        timeZone: "Europe/Paris",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false
-    }).format(new Date()).replace(":", "h");
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Paris",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  }).format(new Date());
 }
 
 
-/* ========================================
-   AUTHENTIFICATION DES REQUETES
-======================================== */
+function getErrorStatus(error) {
+  const message = error?.message || "";
 
-async function requireUser(request, env) {
-    const session = await getSession(request, env);
+  if (message === "UNAUTHORIZED") return 401;
+  if (message === "BADGE_DAY_NOT_AVAILABLE") return 403;
+  if (message === "ALREADY_BADGED") return 409;
+  if (message === "BADGE_PENDING") return 409;
 
-    if (!session || !session.user) {
-        return null;
-    }
-
-    return session.user;
+  return 500;
 }
 
 
-/* ========================================
-   ROUTES API
-======================================== */
-
-async function handleRequest(request, env, ctx) {
+export default {
+  async fetch(request, env) {
     const url = new URL(request.url);
-    const path = url.pathname;
-    const method = request.method;
+    const corsHeaders = getCorsHeaders(request, env);
 
-    // Prévol CORS
-    if (method === "OPTIONS") {
+    try {
+      if (request.method === "OPTIONS") {
         return new Response(null, {
-            status: 204,
-            headers: getCorsHeaders(request, env)
+          status: 204,
+          headers: corsHeaders
         });
-    }
+      }
 
-    // Vérification du serveur
-    if (path === "/health" && method === "GET") {
+      if (url.pathname === "/health" && request.method === "GET") {
         return jsonResponse({
-            success: true,
-            application: "Badgeuse du Labo",
-            version: API_VERSION,
-            status: "online"
-        });
-    }
+          status: "ok",
+          service: "badgeuse-twitch"
+        }, 200, corsHeaders);
+      }
 
-    // Démarrage OAuth Twitch
-    if (path === "/auth/start" && method === "GET") {
-        return await handleAuthStart(request, env);
-    }
+      // Authentification Twitch
+      if (url.pathname === "/auth/start" && request.method === "GET") {
+        return handleAuthStart(request, env);
+      }
 
-    // Retour de Twitch après authentification
-    if (path === "/auth/callback" && method === "GET") {
-        return await handleAuthCallback(request, env);
-    }
+      if (url.pathname === "/auth/callback" && request.method === "GET") {
+        return handleAuthCallback(request, env);
+      }
 
-    // Déconnexion
-    if (path === "/auth/logout" && method === "POST") {
-        return await handleLogout(request, env);
-    }
+      if (url.pathname === "/auth/logout" && request.method === "POST") {
+        return handleLogout(request, env);
+      }
 
-    // Informations utilisateur et statut du badge
-    if (path === "/api/me" && method === "GET") {
-        const user = await requireUser(request, env);
+      // Vérification de la session et de l'état de badgeage
+      if (url.pathname === "/api/me" && request.method === "GET") {
+        const session = await getSession(request, env);
 
-        if (!user) {
-            return errorResponse(
-                "Tu dois être connecté avec Twitch.",
-                401,
-                "UNAUTHENTICATED"
-            );
+        if (!session) {
+          return jsonResponse({
+            error: "UNAUTHORIZED"
+          }, 401, corsHeaders);
         }
 
+        await upsertUser({
+          id: session.id,
+          login: session.login,
+          displayName: session.displayName,
+          profileImageUrl: session.profileImageUrl
+        }, env);
+
         const date = getParisDate();
+        const planning = await getPlanning(env);
+
+        const today = planning.dates.find(
+          item => item.date === date
+        );
 
         const badgeStatus = await getBadgeStatus(
-            env,
-            user,
-            date
+          session.id,
+          date,
+          env
         );
 
         return jsonResponse({
-            success: true,
-            user: {
-                id: user.id,
-                login: user.login
-            },
-            alreadyBadged: badgeStatus.alreadyBadged,
-            date
-        });
-    }
+          user: {
+            id: session.id,
+            login: session.login,
+            displayName: session.displayName,
+            profileImageUrl: session.profileImageUrl
+          },
+          date,
+          time: getParisTime(),
+          plannedToday: Boolean(today?.enabled),
+          alreadyBadged: badgeStatus.hasBadged,
+          pending: badgeStatus.pending,
+          badge: badgeStatus.badge
+        }, 200, corsHeaders);
+      }
 
-    // Enregistrement du badge
-    if (path === "/api/badge" && method === "POST") {
-        const user = await requireUser(request, env);
+      // Enregistrement du badge quotidien
+      if (url.pathname === "/api/badge" && request.method === "POST") {
+        const session = await getSession(request, env);
 
-        if (!user) {
-            return errorResponse(
-                "Tu dois être connecté avec Twitch.",
-                401,
-                "UNAUTHENTICATED"
-            );
+        if (!session) {
+          return jsonResponse({
+            error: "UNAUTHORIZED"
+          }, 401, corsHeaders);
         }
 
         const date = getParisDate();
         const time = getParisTime();
 
-        const result = await recordBadge(
-            env,
-            user,
-            date,
-            time
+        const planning = await getPlanning(env);
+
+        const today = planning.dates.find(
+          item => item.date === date
         );
 
-        if (!result.success) {
-            if (result.code === "ALREADY_BADGED") {
-                return errorResponse(
-                    "Tu as déjà badgé aujourd'hui.",
-                    409,
-                    "ALREADY_BADGED"
-                );
-            }
-
-            if (result.code === "DATE_NOT_FOUND") {
-                return errorResponse(
-                    "La date du jour n'est pas présente dans la badgeuse.",
-                    409,
-                    "DATE_NOT_FOUND"
-                );
-            }
-
-            if (result.code === "NO_FREE_ROW") {
-                return errorResponse(
-                    "Impossible d'ajouter un nouvel utilisateur : tableau complet.",
-                    409,
-                    "NO_FREE_ROW"
-                );
-            }
-
-            throw new Error("Échec de l'enregistrement du badge.");
+        if (!today?.enabled) {
+          return jsonResponse({
+            error: "BADGE_DAY_NOT_AVAILABLE"
+          }, 403, corsHeaders);
         }
 
-        return jsonResponse({
-            success: true,
-            message: "Badge enregistré avec succès.",
-            time,
-            date
-        });
-    }
+        await upsertUser({
+          id: session.id,
+          login: session.login,
+          displayName: session.displayName,
+          profileImageUrl: session.profileImageUrl
+        }, env);
 
-    // Route inconnue
-    return errorResponse(
-        "Cette route n'existe pas.",
-        404,
-        "NOT_FOUND"
-    );
-}
+        const reservation = await reserveBadge(
+          session.id,
+          date,
+          time,
+          env
+        );
 
+        if (!reservation.reserved) {
+          if (reservation.reason === "already_recorded") {
+            return jsonResponse({
+              error: "ALREADY_BADGED"
+            }, 409, corsHeaders);
+          }
 
-/* ========================================
-   GESTION GLOBALE DES ERREURS
-======================================== */
+          return jsonResponse({
+            error: "BADGE_PENDING"
+          }, 409, corsHeaders);
+        }
 
-export default {
-    async fetch(request, env, ctx) {
         try {
-            const response = await handleRequest(
-                request,
-                env,
-                ctx
-            );
+          const result = await recordBadge(
+            session.id,
+            date,
+            env
+          );
 
-            return withCors(response, request, env);
+          await markBadgeRecorded(
+            session.id,
+            date,
+            result.sheetRow,
+            env
+          );
+
+          return jsonResponse({
+            success: true,
+            date,
+            time,
+            sheetRow: result.sheetRow
+          }, 200, corsHeaders);
 
         } catch (error) {
-            // Ne pas exposer les détails internes au navigateur.
-            console.error("Erreur API Badgeuse :", error);
-
-            const response = errorResponse(
-                "Une erreur interne est survenue. Réessaie plus tard.",
-                500,
-                "INTERNAL_ERROR"
+          try {
+            await markBadgeFailed(
+              session.id,
+              date,
+              env
             );
+          } catch (databaseError) {
+            console.error(
+              "Impossible de mettre à jour le statut du badge :",
+              databaseError
+            );
+          }
 
-            return withCors(response, request, env);
+          throw error;
         }
+      }
+
+      return jsonResponse({
+        error: "NOT_FOUND"
+      }, 404, corsHeaders);
+
+    } catch (error) {
+      console.error("Worker error:", error);
+
+      const status = getErrorStatus(error);
+
+      return jsonResponse({
+        error: status === 500
+          ? "INTERNAL_SERVER_ERROR"
+          : error.message
+      }, status, corsHeaders);
     }
+  }
 };
