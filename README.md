@@ -114,12 +114,12 @@ Ne pas ouvrir le service au public avant d'avoir terminé les vérifications d'i
 
 ## Recherche des anciens pseudos Twitch (outil de migration)
 
-Un outil de préparation en lecture seule est disponible à `/admin-lookup.html` après publication du frontend.
+Un outil de préparation en lecture seule est disponible à `https://the-ashbringer.github.io/badgeusedulabo.io/admin-lookup.html` après publication du frontend.
 
 Avant utilisation :
 1. Ajouter la variable Worker `TWITCH_ADMIN_LOGIN` avec le **login Twitch exact** du compte administrateur. Ne pas inscrire cette valeur dans le dépôt.
 2. Se connecter à la badgeuse depuis le même onglet navigateur.
-3. Ouvrir `/admin-lookup.html` dans ce même onglet et lancer la recherche.
+3. Ouvrir cette URL dans ce même onglet et lancer la recherche.
 
 L'outil envoie les pseudos par lots de 24 et exporte les résultats en CSV. Il ne modifie ni D1 ni Google Sheets.
 
