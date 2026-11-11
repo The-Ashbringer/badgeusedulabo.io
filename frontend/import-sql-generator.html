@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Générateur SQL — Badgeuse du Labo</title>
+<style>
+:root{color-scheme:light dark;font:16px system-ui,sans-serif}body{max-width:920px;margin:32px auto;padding:0 18px;line-height:1.5}h1{font-size:1.7rem}textarea{width:100%;min-height:260px;font:13px ui-monospace,monospace;padding:12px;box-sizing:border-box}button{padding:10px 16px;margin:10px 8px 10px 0;cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:Canvas;padding:14px;border:1px solid #8886;border-radius:8px}.status{padding:12px;border:1px solid #8888;border-radius:8px;margin:14px 0}.danger{border-color:#c44}small{opacity:.8}
+</style>
+</head>
+<body>
+<h1>Générateur SQL — import historique</h1>
+<p>Outil local : le CSV est traité dans ton navigateur. Aucun envoi réseau, aucune écriture automatique dans D1.</p>
+<p><strong>CSV attendu :</strong> export semicolon séparé avec les colonnes <code>twitch_user_id;twitch_login;display_name;badge_date;badge_time;status;pseudo_source</code>. Seules les dates du 8 au 11 novembre 2026 sont acceptées.</p>
+<label for="csv"><strong>Colle ici le CSV validé depuis l'aperçu d'import :</strong></label>
+<textarea id="csv" spellcheck="false" placeholder="twitch_user_id;twitch_login;display_name;badge_date;badge_time;status;pseudo_source"></textarea>
+<div><button id="check">Vérifier le CSV</button><button id="download" disabled>Télécharger le SQL</button></div>
+<div id="result" class="status" role="status">En attente du CSV.</div>
+<pre id="sql" hidden></pre>
+<p><strong>Important :</strong> le SQL supprime uniquement les deux lignes de test connues (ID 1 et 2, avec leurs identifiants Twitch, date et heures exacts), puis insère les lignes historiques. Ne l'exécute que si le contrôle préalable D1 confirme toujours ces deux lignes et aucune autre ligne du 8 au 11 novembre 2026.</p>
+<small>Le fichier SQL contient une transaction, les insertions explicites et des requêtes de vérification. Il ne contient aucun pseudo sans identifiant Twitch.</small>
+<script>
+const $=id=>document.getElementById(id);
+function parseCSV(s){
+ const rows=[];let row=[],field='',quoted=false;
+ for(let i=0;i<s.length;i++){const c=s[i];
+  if(quoted){if(c==='"'&&s[i+1]==='"'){field+='"';i++}else if(c==='"')quoted=false;else field+=c}
+  else if(c==='"')quoted=true;
+  else if(c===';'){row.push(field);field=''}
+  else if(c==='\n'){row.push(field);rows.push(row);row=[];field=''}
+  else if(c!=='\r')field+=c;
+ }
+ if(quoted)throw Error('Guillemet CSV non fermé.');
+ if(field.length||row.length){row.push(field);rows.push(row)}
+ return rows.filter(r=>r.some(x=>x.trim()!==''));
+}
+const esc=s=>"'"+String(s).replace(/'/g,"''")+"'";
+function build(){
+ $('download').disabled=true;$('sql').hidden=true;
+ try{
+  const rows=parseCSV($('csv').value.trim());if(rows.length<2)throw Error('CSV vide ou incomplet.');
+  const head=rows.shift().map(x=>x.trim().replace(/^\uFEFF/,''));
+  const ix=Object.fromEntries(head.map((h,i)=>[h,i]));
+  const required=['twitch_user_id','twitch_login','display_name','badge_date','badge_time','status'];
+  for(const h of required)if(ix[h]===undefined)throw Error('Colonne obligatoire absente : '+h);
+  const data=rows.map((r,n)=>{
+   const get=k=>(r[ix[k]]??'').trim();
+   const id=get('twitch_user_id'),date=get('badge_date'),time=get('badge_time'),status=get('status');
+   if(!/^\d+$/.test(id))throw Error('Ligne '+(n+2)+': identifiant Twitch invalide.');
+   if(!/^2026-11-(0[8-9]|1[01])$/.test(date))throw Error('Ligne '+(n+2)+': date hors période ou format incorrect ('+date+').');
+   if(!/^(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d$/.test(time))throw Error('Ligne '+(n+2)+': heure invalide ('+time+').');
+   if(status!=='recorded')throw Error('Ligne '+(n+2)+': statut différent de recorded.');
+   return {id,date,time};
+  });
+  const seen=new Set();for(const x of data){const k=x.id+'|'+x.date;if(seen.has(k))throw Error('Doublon : identifiant '+x.id+' le '+x.date+'. Une seule badgeuse par personne et par jour.');seen.add(k)}
+  if(!data.length)throw Error('Aucune ligne à importer.');
+  const deletes=[
+   "DELETE FROM badges WHERE id = 1 AND twitch_user_id = '103271510' AND badge_date = '2026-11-11' AND badge_time = '19:48:03' AND status = 'recorded';",
+   "DELETE FROM badges WHERE id = 2 AND twitch_user_id = '116593479' AND badge_date = '2026-11-11' AND badge_time = '20:28:41' AND status = 'recorded';"
+  ];
+  const inserts=data.map(x=>"INSERT INTO badges (twitch_user_id, badge_date, badge_time, status) VALUES ("+[esc(x.id),esc(x.date),esc(x.time),"'recorded'"].join(', ')+");");
+  const sql=[
+   '-- Badgeuse du Labo — import historique 08–11/11/2026',
+   '-- Vérifier la requête de précontrôle D1 avant exécution.',
+   'BEGIN TRANSACTION;',
+   ...deletes,
+   ...inserts,
+   'COMMIT;',
+   '',
+   '-- Contrôle après import : total attendu = '+data.length,
+   "SELECT COUNT(*) AS total_importe FROM badges WHERE badge_date BETWEEN '2026-11-08' AND '2026-11-11' AND status = 'recorded';",
+   "SELECT twitch_user_id, badge_date, COUNT(*) AS n FROM badges WHERE badge_date BETWEEN '2026-11-08' AND '2026-11-11' GROUP BY twitch_user_id, badge_date HAVING COUNT(*) > 1;"
+  ].join('\n');
+  $('sql').textContent=sql;$('sql').hidden=false;$('download').disabled=false;
+  $('result').textContent='CSV valide : '+data.length+' pointage(s), '+seen.size+' couples identifiant/jour uniques. Aucun doublon détecté. SQL prêt à télécharger — aucun changement D1 effectué.';
+  $('result').className='status';
+  $('download').onclick=()=>{const blob=new Blob([sql],{type:'text/sql;charset=utf-8'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='badgeuse-import-historique-2026-11-08_11.sql';a.click();URL.revokeObjectURL(a.href)};
+ }catch(e){$('result').textContent='Erreur : '+e.message;$('result').className='status danger'}
+}
+$('check').addEventListener('click',build);
+</script>
+</body></html>
