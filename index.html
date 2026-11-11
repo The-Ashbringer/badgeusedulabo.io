@@ -1,0 +1,125 @@
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0e0e10">
+
+    <title>Badgeuse du Labo</title>
+
+    <meta
+        name="description"
+        content="Badge ta présence à la matinale du Labo."
+    >
+
+    <link rel="stylesheet" href="./styles.css">
+    <script src="./app.js" defer></script>
+</head>
+
+<body>
+    <main class="app-container">
+
+        <header class="app-header">
+            <div class="brand">
+                <div class="brand-icon">L</div>
+                <div>
+                    <h1>Badgeuse du Labo</h1>
+                    <p>La matinale communautaire</p>
+                </div>
+            </div>
+
+            <div class="live-indicator">
+                <span class="live-dot"></span>
+                <span>BADGEUSE</span>
+            </div>
+        </header>
+
+        <section class="badge-card">
+
+            <div class="card-heading">
+                <span class="eyebrow">POINTAGE QUOTIDIEN</span>
+                <h2>Présent à la matinale ?</h2>
+                <p>Un clic pour signaler ta présence !</p>
+            </div>
+
+            <div class="date-display">
+                <span class="date-icon">📅</span>
+                <div>
+                    <span id="current-date">Chargement...</span>
+                    <strong id="current-time">--:--:--</strong>
+                </div>
+            </div>
+
+            <div id="auth-section" class="auth-section">
+                <p>Connecte-toi avec ton compte Twitch pour badger.</p>
+
+                <button
+                    id="login-button"
+                    class="button button-twitch"
+                    type="button"
+                >
+                    <span class="twitch-icon">T</span>
+                    Se connecter avec Twitch
+                </button>
+            </div>
+
+            <div id="user-section" class="user-section" hidden>
+
+                <div class="user-info">
+                    <div class="avatar-placeholder" id="user-avatar">
+                        ?
+                    </div>
+
+                    <div class="user-details">
+                        <span class="user-label">CONNECTÉ EN TANT QUE</span>
+                        <strong id="user-name">Utilisateur</strong>
+                    </div>
+
+                    <button
+                        id="logout-button"
+                        class="button-logout"
+                        type="button"
+                        aria-label="Se déconnecter"
+                    >
+                        Déconnexion
+                    </button>
+                </div>
+
+                <div id="badge-status" class="badge-status">
+                    <span class="status-indicator"></span>
+                    <span id="status-text">Vérification du pointage...</span>
+                </div>
+
+                <button
+                    id="badge-button"
+                    class="button button-badge"
+                    type="button"
+                    disabled
+                >
+                    Je badge maintenant
+                </button>
+
+                <p class="badge-notice">
+                    Un seul pointage autorisé par jour et par compte Twitch.
+                </p>
+            </div>
+
+            <div
+                id="feedback-message"
+                class="feedback-message"
+                role="status"
+                aria-live="polite"
+                hidden
+            ></div>
+
+        </section>
+
+        <footer class="app-footer">
+            <p>Badgeuse communautaire du Labo</p>
+            <p>Heure française · Europe/Paris</p>
+        </footer>
+
+    </main>
+</body>
+</html>
