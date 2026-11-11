@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
 <title>Résolution des anciens pseudos — Badgeuse du Labo</title>
 <style>
 body{font:16px system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 18px;background:#0e0e10;color:#efeff1}
@@ -150,16 +151,20 @@ yuki8345</textarea>
 <button id="run">Rechercher les comptes</button>
 <button id="download" disabled>Exporter les résultats CSV</button>
 </div>
-<div id="status" role="status">Prêt. 1 pseudos chargés.</div>
+<div id="status" role="status" aria-live="polite"></div>
 <div id="results"></div>
 <script>
 const API="https://badgeuse-twitch.docarenou.workers.dev";
 const SESSION_KEY="badgeuse_session";
 let allResults=[];
 const statusEl=document.getElementById("status");
+const runBtn=document.getElementById("run");
+const namesEl=document.getElementById("names");
+const initialNames=[...new Set(namesEl.value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean))];
+statusEl.textContent="Prêt. "+initialNames.length+" pseudos chargés.";
 const resultsEl=document.getElementById("results");
 const downloadBtn=document.getElementById("download");
-function csvCell(v){return '"'+String(v??"").replace(/"/g,'""')+'"';}
+function csvCell(v){const value=String(v??"");const safe=/^[\\t\\r ]*[=+\\-@]/.test(value)?"\'"+value:value;return '"' + safe.replace(/"/g,'""') + '"' ;}
 function render(){
  const rows=allResults.map(r=>{
   const candidates=r.channelCandidates||[];
@@ -170,7 +175,7 @@ function render(){
  resultsEl.innerHTML='<table><thead><tr><th>Pseudo source</th><th>Statut</th><th>Compte(s) trouvé(s)</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-document.getElementById("run").addEventListener("click",async()=>{
+runBtn.addEventListener("click",async()=>{
  const token=sessionStorage.getItem(SESSION_KEY);
  if(!token){statusEl.textContent="Session absente. Connecte-toi d'abord à la badgeuse dans ce même onglet.";return;}
  const names=[...new Set(document.getElementById("names").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];
@@ -181,13 +186,13 @@ document.getElementById("run").addEventListener("click",async()=>{
    const response=await fetch(API+'/api/admin/twitch-lookup',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({names:names.slice(i,i+24)})});
    const data=await response.json();
    if(!response.ok)throw new Error(data.message||data.code||('HTTP '+response.status));
-   allResults.push(...data.results);
+   allResults.push(...data.results);\n   render();
   }
-  render();downloadBtn.disabled=false;
+  downloadBtn.disabled=false;
   const exact=allResults.filter(x=>x.exactLoginMatch).length;
   const candidate=allResults.filter(x=>!x.exactLoginMatch&&x.channelCandidates.length).length;
   statusEl.textContent='Terminé : '+allResults.length+' pseudos, '+exact+' correspondances exactes par login, '+candidate+' pistes de chaîne, '+(allResults.length-exact-candidate)+' sans résultat.';
- }catch(e){statusEl.textContent='Erreur : '+e.message;}
+ }catch(e){statusEl.textContent='Erreur : '+e.message+(allResults.length?' Résultats partiels conservés : '+allResults.length+'.':'');}\n finally{runBtn.disabled=false;}
 });
 downloadBtn.addEventListener("click",()=>{
  const rows=[["pseudo_source","statut","twitch_login","display_name","twitch_user_id"]];
