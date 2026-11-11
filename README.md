@@ -110,3 +110,20 @@ L'URL GitHub Pages obtenue doit correspondre à `FRONTEND_URL` dans `backend/wra
 - Les tests de code ne remplacent pas un test d'intégration avec Twitch, Cloudflare et Google Sheets.
 
 Ne pas ouvrir le service au public avant d'avoir terminé les vérifications d'intégration.
+
+
+## Recherche des anciens pseudos Twitch (outil de migration)
+
+Un outil de préparation en lecture seule est disponible à `/admin-lookup.html` après publication du frontend.
+
+Avant utilisation :
+1. Ajouter la variable Worker `TWITCH_ADMIN_LOGIN` avec le **login Twitch exact** du compte administrateur. Ne pas inscrire cette valeur dans le dépôt.
+2. Se connecter à la badgeuse depuis le même onglet navigateur.
+3. Ouvrir `/admin-lookup.html` dans ce même onglet et lancer la recherche.
+
+L'outil envoie les pseudos par lots de 50 et exporte les résultats en CSV. Il ne modifie ni D1 ni Google Sheets.
+
+Limites de l'API Twitch :
+- `GET /helix/users?login=` confirme uniquement les logins exacts.
+- `GET /helix/search/channels` peut fournir des candidats correspondant au début d'un login ou d'un nom d'affichage, mais ne couvre que les chaînes ayant diffusé au cours des six derniers mois.
+- Un candidat de recherche n'est jamais considéré comme une correspondance vérifiée. Les comptes introuvables devront être traités séparément.
