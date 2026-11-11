@@ -735,7 +735,7 @@ export async function recordBadge(
   return {
     success: true,
     time: badge.badge_time,
-    sheetRow: userIndex + 3,
+    sheetRow: syncResult.sheetRow,
     ...syncResult
   };
 }
