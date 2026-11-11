@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Résolution des anciens pseudos — Badgeuse du Labo</title>
+<style>
+body{font:16px system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 18px;background:#0e0e10;color:#efeff1}
+h1{font-size:1.6rem}p{line-height:1.5;color:#c7c7d1}
+button{padding:10px 16px;margin:8px 8px 8px 0;border:0;border-radius:6px;cursor:pointer}
+textarea{width:100%;min-height:300px;box-sizing:border-box;background:#18181b;color:#efeff1;border:1px solid #555;padding:12px;font:14px ui-monospace,monospace}
+#status{padding:12px 0;color:#bf9}
+table{width:100%;border-collapse:collapse;margin-top:20px;font-size:14px}
+th,td{padding:8px;border-bottom:1px solid #444;text-align:left;vertical-align:top}
+code{color:#bf9}.muted{color:#aaa}
+</style>
+</head>
+<body>
+<h1>Résolution des anciens pseudos Twitch</h1>
+<p>Outil privé de préparation de migration. Connecte-toi d'abord à la badgeuse Twitch dans le même onglet, puis ouvre cette page. La recherche est en lecture seule : elle ne modifie ni D1 ni Google Sheets.</p>
+<p><strong>Important :</strong> un résultat exact par login est une correspondance technique forte. Un candidat trouvé par recherche de chaîne reste à vérifier. Twitch ne permet pas de retrouver tous les comptes inactifs par nom d'affichage.</p>
+<textarea id="names">KEMIST
+Ben_Letitilleur
+89Somnium
+AeolianOnonoki
+Albinjuliu
+Alckatrase
+Alexis_circulaire
+altheatv94
+Antartiks
+Anthwoine
+Arthurito_57
+as_arius
+Atsukii___
+Aubrass
+Bebel_Lancien
+BonesCrusher_Oli
+bouba_rx0
+BroYaqz
+catdesu
+cent_peines
+clocloquil08
+Cnackie
+codie73_
+Comox411
+confiroque
+coquillette
+cyp_urlinternet
+Daeress
+DocRoxas
+Dr4lixe
+Dragonfire6392
+DuuBsTePP
+easy_m97
+Ekalyxie
+ERESIS
+ezothraal
+Ezuod
+fan2rahan
+fascibrow
+Flow_IV
+Forkmotion
+Frykome
+fundinelfoot
+Gougoutes
+Gwyndxllin
+haskonoha
+herejy_C158H251N39O46S
+Horrorius
+Hugo1451
+HydroFlo
+ImDimeh
+js_musashi
+Julien_aldo
+Jybs2a
+KaFLM
+Kaleryann
+Karmos
+Kiiwiibear
+Letucdelu
+Lokicronos
+Lokisama_
+Lordinou
+MagiikPotiron
+Manubiwan
+mareek
+Mim0un
+miniSkiiez
+MissUvex
+mitchmiitch
+moltarios
+Necureuil
+Ned_gng
+Needless85
+Neufneuf
+Nuruhuine2512
+omega6
+Onyx564
+paka_C21H30O2
+Papi_cinema
+PersilfeurRpz
+platnorm
+proutichol
+pyoulp
+Pyrosuider468
+RaafeK
+ricky_badwolf
+Robernardd
+RodyVanHalen_C21H30O5
+rvezed
+SaucisseDeMetal_C2H6O
+Sawaldoh
+Scana
+scorion
+Seikogi
+Shoku8
+Slykun
+solsaros
+Soly_C12H16N2O
+Son of machete
+Soulsnooby
+Srzoud
+ST_Lepont_CCLF3
+Stagma
+tf2swirl_XeO2F2
+the4bat
+therun_gg
+Tom_pltl
+totorico
+Trakkarrr
+Triniliife
+Triskelionbae
+TsarBombaCS
+Tyhbz
+Uncl3G84
+Uriel
+vinzou
+Wavereen
+whewhyze
+WideMdr_
+Wizebot
+xanagram
+xinahj
+yearzerooo
+Yedagnozy
+Ylidhiel
+yop7488
+yuki8345</textarea>
+<div>
+<button id="run">Rechercher les comptes</button>
+<button id="download" disabled>Exporter les résultats CSV</button>
+</div>
+<div id="status" role="status">Prêt. 1 pseudos chargés.</div>
+<div id="results"></div>
+<script>
+const API="https://badgeuse-twitch.docarenou.workers.dev";
+const SESSION_KEY="badgeuse_session";
+let allResults=[];
+const statusEl=document.getElementById("status");
+const resultsEl=document.getElementById("results");
+const downloadBtn=document.getElementById("download");
+function csvCell(v){return '"'+String(v??"").replace(/"/g,'""')+'"';}
+function render(){
+ const rows=allResults.map(r=>{
+  const candidates=r.channelCandidates||[];
+  const exact=r.exactLoginMatch;
+  const found=exact?[exact]:candidates;
+  return '<tr><td>'+escapeHtml(r.legacyName)+'</td><td>'+escapeHtml(r.status)+'</td><td>'+found.map(x=>escapeHtml(x.displayName+' ('+x.login+') — '+x.id)).join('<br>')+'</td></tr>';
+ }).join("");
+ resultsEl.innerHTML='<table><thead><tr><th>Pseudo source</th><th>Statut</th><th>Compte(s) trouvé(s)</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
+function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+document.getElementById("run").addEventListener("click",async()=>{
+ const token=sessionStorage.getItem(SESSION_KEY);
+ if(!token){statusEl.textContent="Session absente. Connecte-toi d'abord à la badgeuse dans ce même onglet.";return;}
+ const names=[...new Set(document.getElementById("names").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];
+ allResults=[];resultsEl.innerHTML="";downloadBtn.disabled=true;
+ try{
+  for(let i=0;i<names.length;i+=50){
+   statusEl.textContent='Recherche '+Math.min(i+50,names.length)+' / '+names.length+'…';
+   const response=await fetch(API+'/api/admin/twitch-lookup',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({names:names.slice(i,i+50)})});
+   const data=await response.json();
+   if(!response.ok)throw new Error(data.message||data.code||('HTTP '+response.status));
+   allResults.push(...data.results);
+  }
+  render();downloadBtn.disabled=false;
+  const exact=allResults.filter(x=>x.exactLoginMatch).length;
+  const candidate=allResults.filter(x=>!x.exactLoginMatch&&x.channelCandidates.length).length;
+  statusEl.textContent='Terminé : '+allResults.length+' pseudos, '+exact+' correspondances exactes par login, '+candidate+' pistes de chaîne, '+(allResults.length-exact-candidate)+' sans résultat.';
+ }catch(e){statusEl.textContent='Erreur : '+e.message;}
+});
+downloadBtn.addEventListener("click",()=>{
+ const rows=[["pseudo_source","statut","twitch_login","display_name","twitch_user_id"]];
+ for(const r of allResults){
+  if(r.exactLoginMatch){const x=r.exactLoginMatch;rows.push([r.legacyName,r.status,x.login,x.displayName,x.id]);}
+  else if(r.channelCandidates.length){for(const x of r.channelCandidates)rows.push([r.legacyName,r.status,x.login,x.displayName,x.id]);}
+  else rows.push([r.legacyName,r.status,"","",""]);
+ }
+ const csv="\\uFEFF"+rows.map(row=>row.map(csvCell).join(";")).join("\\r\\n");
+ const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+ const a=document.createElement("a");a.href=url;a.download="correspondances-twitch-a-verifier.csv";a.click();URL.revokeObjectURL(url);
+});
+</script>
+</body>
+</html>
