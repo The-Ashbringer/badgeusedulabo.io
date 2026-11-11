@@ -176,9 +176,9 @@ document.getElementById("run").addEventListener("click",async()=>{
  const names=[...new Set(document.getElementById("names").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];
  allResults=[];resultsEl.innerHTML="";downloadBtn.disabled=true;
  try{
-  for(let i=0;i<names.length;i+=50){
-   statusEl.textContent='Recherche '+Math.min(i+50,names.length)+' / '+names.length+'…';
-   const response=await fetch(API+'/api/admin/twitch-lookup',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({names:names.slice(i,i+50)})});
+  for(let i=0;i<names.length;i+=24){
+   statusEl.textContent='Recherche '+Math.min(i+24,names.length)+' / '+names.length+'…';
+   const response=await fetch(API+'/api/admin/twitch-lookup',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({names:names.slice(i,i+24)})});
    const data=await response.json();
    if(!response.ok)throw new Error(data.message||data.code||('HTTP '+response.status));
    allResults.push(...data.results);
