@@ -1,6 +1,7 @@
 import {
   handleAuthStart,
   handleAuthCallback,
+  handleAuthExchange,
   handleLogout,
   getSession
 } from "./auth.js";
@@ -32,7 +33,6 @@ function getCorsHeaders(request, env) {
   const headers = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Credentials": "true",
     "Vary": "Origin"
   };
 
@@ -119,6 +119,18 @@ export default {
 
       if (url.pathname === "/auth/callback" && request.method === "GET") {
         return handleAuthCallback(request, env);
+      }
+
+      if (url.pathname === "/auth/exchange" && request.method === "POST") {
+        const response = await handleAuthExchange(request, env);
+        const headers = new Headers(response.headers);
+        for (const [key, value] of Object.entries(corsHeaders)) {
+          headers.set(key, value);
+        }
+        return new Response(response.body, {
+          status: response.status,
+          headers
+        });
       }
 
       if (url.pathname === "/auth/logout" && request.method === "POST") {
