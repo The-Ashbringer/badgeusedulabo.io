@@ -137,8 +137,18 @@ export async function handleAuthCallback(request, env) {
     const loginCode = randomString(32);
     const codeHash = await hashToken(loginCode);
     const now = Math.floor(Date.now() / 1000);
+    const db = getDatabase(env);
 
-    await getDatabase(env).prepare(`
+    // Nettoyage opportuniste des codes et sessions expirés.
+    await db.prepare(`
+      DELETE FROM auth_codes WHERE expires_at <= ?
+    `).bind(now).run();
+
+    await db.prepare(`
+      DELETE FROM auth_sessions WHERE expires_at <= ?
+    `).bind(now).run();
+
+    await db.prepare(`
       INSERT INTO auth_codes (
         code_hash,
         twitch_user_id,
