@@ -38,7 +38,7 @@ Créer un classeur avec deux onglets nommés `BADGEUSE` et `CONFIG`.
 Dans `BADGEUSE` :
 - ligne 1 : titre libre, conservé par la synchronisation ;
 - ligne 2 : en-têtes générés automatiquement ;
-- ligne 3 et suivantes : comptes Twitch triés par login.
+- ligne 3 et suivantes : comptes Twitch triés par nom d'affichage.
 
 Dans `CONFIG` :
 - `C2` : date de début ;
