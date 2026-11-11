@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prévisualisation import historique — Badgeuse du Labo</title>
+<style>
+:root{color-scheme:dark;--bg:#111318;--panel:#1b1e26;--line:#343946;--muted:#a6adbb;--text:#f2f4f8;--accent:#9b8cff;--good:#78d6a0;--warn:#f0c36b;--bad:#f18b8b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
+main{max-width:1180px;margin:36px auto;padding:0 20px 60px}h1{font-size:clamp(24px,4vw,34px);margin:0 0 8px}h2{font-size:19px;margin:0 0 12px}.muted{color:var(--muted)}.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin:18px 0}
+.steps{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field{display:flex;flex-direction:column;gap:7px}label{font-weight:650}input[type=file]{width:100%;padding:12px;background:#11141a;border:1px dashed #596174;border-radius:9px;color:var(--text)}
+button,.download{border:0;border-radius:9px;background:var(--accent);color:#151321;font-weight:750;padding:11px 16px;cursor:pointer;text-decoration:none;display:inline-block}button:disabled{opacity:.45;cursor:not-allowed}.secondary{background:#303644;color:var(--text)}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.stat{background:#12151b;border:1px solid var(--line);padding:12px;border-radius:10px}.stat strong{font-size:25px;display:block}.stat span{font-size:12px;color:var(--muted)}
+.notice{padding:12px 14px;border-radius:9px;background:#252337;border:1px solid #49436d;margin:12px 0}.warning{background:#30291c;border-color:#705b2e}.error{background:#321f22;border-color:#754044}
+.table-wrap{overflow:auto;max-height:65vh;border:1px solid var(--line);border-radius:10px}table{width:100%;border-collapse:collapse;min-width:850px;font-size:13px}th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}th{position:sticky;top:0;background:#252a35;z-index:1}td input[type=text]{width:105px;background:#10131a;border:1px solid #555d6d;border-radius:6px;padding:6px;color:var(--text)}tr.invalid{background:#301f22}tr.duplicate{background:#332c1c}.tag{font-size:11px;padding:3px 7px;border-radius:99px;background:#303644}.ok{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}.hidden{display:none}.small{font-size:12px}
+@media(max-width:720px){main{margin-top:22px}.steps,.stats{grid-template-columns:1fr 1fr}.panel{padding:14px}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Import historique — prévisualisation</h1>
+  <p class="muted">Outil local de préparation des badges du 8 au 11 novembre 2026. Les fichiers sont lus dans ton navigateur : rien n'est envoyé au Worker, à D1 ou à Google Sheets.</p>
+  <section class="panel">
+    <h2>1. Charger les deux exports CSV</h2>
+    <div class="steps">
+      <div class="field"><label for="history">Ancien Google Sheets (CSV brut)</label><input id="history" type="file" accept=".csv,text/csv"></div>
+      <div class="field"><label for="lookup">Résultat de la recherche Twitch (CSV)</label><input id="lookup" type="file" accept=".csv,text/csv"></div>
+    </div>
+    <div class="notice small">Le CSV Twitch doit être celui exporté depuis la page admin, avec les colonnes pseudo_source, statut, twitch_login, display_name et twitch_user_id. Le CSV historique doit contenir la ligne des dates du 08/11/2026 au 15/11/2026.</div>
+    <div class="actions"><button id="prepare">Analyser les fichiers</button></div>
+    <div id="message" role="status" class="muted small" aria-live="polite"></div>
+  </section>
+
+  <section id="results" class="hidden">
+    <div class="panel">
+      <h2>2. Résumé de l'analyse</h2>
+      <div class="stats">
+        <div class="stat"><strong id="sRows">0</strong><span>Badges horaires détectés</span></div>
+        <div class="stat"><strong id="sMapped">0</strong><span>Badges avec compte Twitch exact</span></div>
+        <div class="stat"><strong id="sUnresolved">0</strong><span>Badges de pseudos non résolus</span></div>
+        <div class="stat"><strong id="sInvalid">0</strong><span>Cellules horaires à vérifier</span></div>
+      </div>
+      <p id="summary" class="muted small"></p>
+      <div class="notice warning small">Aucune donnée n'est importée. Vérifie les heures, les correspondances et les doublons avant de télécharger les fichiers de préparation.</div>
+    </div>
+    <div class="panel">
+      <h2>3. Badges reconnus — vérification</h2>
+      <p class="muted small">Tu peux corriger une heure dans le tableau. Format attendu : HH:MM:SS. Décoche une ligne si tu ne souhaites pas la retenir.</p>
+      <div class="table-wrap"><table><thead><tr><th>Inclure</th><th>Pseudo source</th><th>Date</th><th>Cellule d'origine</th><th>Heure retenue</th><th>Login Twitch</th><th>Display name</th><th>Contrôle</th></tr></thead><tbody id="mappedBody"></tbody></table></div>
+      <div class="actions"><button id="downloadMapped">Télécharger le CSV prêt à relire</button></div>
+    </div>
+    <div class="panel">
+      <h2>4. Pseudos non résolus</h2>
+      <p class="muted small">Leurs lignes sont conservées dans un fichier séparé pour traitement ultérieur. Elles ne sont pas incluses dans le CSV prêt à relire.</p>
+      <div class="table-wrap"><table><thead><tr><th>Pseudo source</th><th>Date</th><th>Heure détectée</th><th>Cellule d'origine</th><th>Statut</th></tr></thead><tbody id="unresolvedBody"></tbody></table></div>
+      <div class="actions"><button id="downloadUnresolved" class="secondary">Télécharger les non résolus</button></div>
+    </div>
+    <div class="panel">
+      <h2>5. Anomalies et doublons</h2>
+      <div id="issues" class="small muted">Aucune anomalie.</div>
+    </div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let mapped = [], unresolved = [], invalid = [], issues = [];
+function parseCsv(text){
+  text = text.replace(/^\uFEFF/, "");
+  const sample = text.split(/\r?\n/).slice(0,12).join("\n");
+  const candidates = [";",",","\t"];
+  const counts = candidates.map(d => ({d, n:(sample.split(d).length-1)}));
+  const delimiter = counts.sort((a,b)=>b.n-a.n)[0].d;
+  const rows=[]; let row=[], cell="", quoted=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(c === '"'){
+      if(quoted && text[i+1] === '"'){cell+='"';i++;}
+      else quoted=!quoted;
+    } else if(c===delimiter && !quoted){row.push(cell);cell="";}
+    else if((c==="\n" || c==="\r") && !quoted){
+      if(c==="\r" && text[i+1]==="\n")i++;
+      row.push(cell);rows.push(row);row=[];cell="";
+    } else cell+=c;
+  }
+  if(cell.length || row.length){row.push(cell);rows.push(row);}
+  return rows;
+}
+function norm(s){return String(s??"").trim().toLocaleLowerCase("fr");}
+function parseDate(s){
+  const m=String(s??"").trim().match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
+  if(!m)return null;
+  return m[3]+"-"+m[2].padStart(2,"0")+"-"+m[1].padStart(2,"0");
+}
+function dateColumns(rows){
+  let best=null;
+  for(let r=0;r<rows.length;r++){
+    const dates=[];
+    for(let c=0;c<rows[r].length;c++){const d=parseDate(rows[r][c]);if(d)dates.push({col:c,date:d});}
+    if(dates.length>=4 && (!best || dates.length>best.dates.length))best={row:r,dates};
+  }
+  return best;
+}
+function parseClock(raw,badgeDate){
+  const s=String(raw??"").trim();
+  if(!s || /^(abs|repos|\/)$/i.test(s))return {kind:"empty"};
+  let h=null,m=0,sec=0;
+  const colon=s.match(/(?:^|\D)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)/);
+  if(colon){h=Number(colon[1]);m=Number(colon[2]);sec=Number(colon[3]||0);}
+  else{
+    const re=/(\d{1,2})\s*h(?:\s*(\d{1,2})(?:\s*(?:m|min)?(?:\s*(\d{1,2})\s*s?)?)?)?/ig;
+    const matches=[...s.matchAll(re)];
+    if(!matches.length)return {kind:"invalid"};
+    const chosen=matches.length>1 && /\bou\b/i.test(s) ? matches.reduce((a,b)=>Number(a[1])*3600+Number(a[2]||0)*60+Number(a[3]||0) >= Number(b[1])*3600+Number(b[2]||0)*60+Number(b[3]||0) ? a:b) : matches[0];
+    h=Number(chosen[1]);m=Number(chosen[2]||0);sec=Number(chosen[3]||0);
+  }
+  if(h>23 || m>59 || sec>59)return {kind:"invalid"};
+  const offset=s.match(/\bUTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?/i);
+  let localDate=badgeDate;
+  if(offset){
+    const dateParts=badgeDate.split("-").map(Number);
+    let date=new Date(Date.UTC(dateParts[0],dateParts[1]-1,dateParts[2],h,m,sec));
+    const sign=offset[1]==="+"?1:-1;
+    const off=sign*(Number(offset[2])*60+Number(offset[3]||0));
+    date=new Date(date.getTime()-off*60000);
+    const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"}).formatToParts(date);
+    const get=t=>parts.find(p=>p.type===t).value;
+    localDate=get("year")+"-"+get("month")+"-"+get("day");
+    h=Number(get("hour"));m=Number(get("minute"));sec=Number(get("second"));
+  }
+  return {kind:"time",date:localDate,time:[h,m,sec].map(n=>String(n).padStart(2,"0")).join(":"),approx:/environ|≈|~|p'tet|peut-être/i.test(s),offset:!!offset};
+}
+function parseLookup(rows){
+  const header=rows.findIndex(r=>r.some(c=>norm(c)==="pseudo_source"));
+  if(header<0)throw new Error("Colonne pseudo_source introuvable dans le CSV Twitch.");
+  const heads=rows[header].map(norm);
+  const idx=n=>heads.indexOf(n);
+  const required=["pseudo_source","statut","twitch_login","display_name","twitch_user_id"];
+  for(const n of required)if(idx(n)<0)throw new Error("Colonne manquante dans le CSV Twitch : "+n);
+  const map=new Map();
+  for(const r of rows.slice(header+1)){
+    const source=String(r[idx("pseudo_source")]||"").trim();if(!source)continue;
+    map.set(norm(source),{source,status:String(r[idx("statut")]||""),login:String(r[idx("twitch_login")]||""),display:String(r[idx("display_name")]||""),id:String(r[idx("twitch_user_id")]||"")});
+  }
+  return map;
+}
+function csvCell(v){const s=String(v??"");return '"'+s.replace(/"/g,'""')+'"';}
+function download(name,rows){
+  const content="\uFEFF"+rows.map(r=>r.map(csvCell).join(";")).join("\r\n");
+  const blob=new Blob([content],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href);
+}
+function build(){
+  mapped=[];unresolved=[];invalid=[];issues=[];
+  const historyFile=$("history").files[0],lookupFile=$("lookup").files[0];
+  if(!historyFile || !lookupFile)throw new Error("Charge les deux fichiers CSV avant de lancer l'analyse.");
+  return Promise.all([historyFile.text(),lookupFile.text()]).then(([ht,lt])=>{
+    const hrows=parseCsv(ht),lrows=parseCsv(lt),lookup=parseLookup(lrows),dc=dateColumns(hrows);
+    if(!dc)throw new Error("Ligne des dates introuvable : il faut au moins quatre dates au format JJ/MM/AAAA.");
+    const wanted=new Set(["2026-11-08","2026-11-09","2026-11-10","2026-11-11"]);
+    const columns=dc.dates.filter(x=>wanted.has(x.date));
+    if(columns.length!==4)throw new Error("Les quatre dates du 08/11/2026 au 11/11/2026 n'ont pas toutes été trouvées.");
+    const seen=new Map();
+    for(const row of hrows.slice(dc.row+1)){
+      const pseudo=String(row[0]||"").trim();if(!pseudo)continue;
+      for(const col of columns){
+        const raw=String(row[col.col]||"").trim();if(!raw || /^(abs|repos|\/)$/i.test(raw))continue;
+        const parsed=parseClock(raw,col.date);
+        if(parsed.kind==="empty")continue;
+        if(parsed.kind==="invalid"){
+          invalid.push({pseudo,date:col.date,raw});
+          continue;
+        }
+        const account=lookup.get(norm(pseudo));
+        const record={pseudo,date:parsed.date||col.date,raw,time:parsed.time,approx:parsed.approx,offset:parsed.offset,include:true,account};
+        if(account && account.status==="exact_login_match" && account.id && account.login){
+          const key=account.id+"|"+col.date;
+          if(seen.has(key)){record.duplicate=true;record.include=false;issues.push("Doublon possible : "+pseudo+" le "+col.date+" partage le même compte Twitch qu'une autre ligne.");}
+          else seen.set(key,record);
+          mapped.push(record);
+        } else unresolved.push({...record,status:account?.status||"pseudo absent du fichier de correspondance"});
+      }
+    }
+    render();
+  });
+}
+function render(){
+  $("results").classList.remove("hidden");
+  $("sRows").textContent=mapped.length+unresolved.length;
+  $("sMapped").textContent=mapped.length;
+  $("sUnresolved").textContent=unresolved.length;
+  $("sInvalid").textContent=invalid.length;
+  $("summary").textContent="Comptes Twitch chargés : "+document.getElementById("lookup").files[0].name+". Les badges hors période, cellules vides, ABS, REPOS et / sont ignorés.";
+  $("mappedBody").innerHTML=mapped.map((r,i)=>'<tr class="'+(r.duplicate?'duplicate':'')+'"><td><input type="checkbox" data-i="'+i+'" '+(r.include?'checked':'')+'></td><td>'+esc(r.pseudo)+'</td><td>'+r.date+'</td><td>'+esc(r.raw)+'</td><td><input type="text" data-time="'+i+'" value="'+r.time+'" aria-label="Heure retenue"></td><td>'+esc(r.account.login)+'</td><td>'+esc(r.account.display)+'</td><td>'+(r.duplicate?'<span class="warn">Doublon</span>':r.approx?'<span class="warn">Approximatif</span>':r.offset?'<span class="ok">Fuseau converti</span>':'<span class="ok">OK</span>')+'</td></tr>').join("");
+  $("unresolvedBody").innerHTML=unresolved.map(r=>'<tr><td>'+esc(r.pseudo)+'</td><td>'+r.date+'</td><td>'+esc(r.time)+'</td><td>'+esc(r.raw)+'</td><td><span class="warn">'+esc(r.status)+'</span></td></tr>').join("");
+  const notes=[];
+  if(invalid.length)notes.push("<p class='bad'><b>"+invalid.length+" cellule(s) horaire(s) non interprétée(s)</b></p><ul>"+invalid.map(x=>"<li>"+esc(x.pseudo)+" — "+x.date+" : "+esc(x.raw)+"</li>").join("")+"</ul>");
+  if(issues.length)notes.push("<p class='warn'><b>"+issues.length+" doublon(s) potentiel(s)</b></p><ul>"+issues.map(esc).map(x=>"<li>"+x+"</li>").join("")+"</ul>");
+  if(!notes.length)notes.push("<p class='ok'>Aucune anomalie de format ni doublon détecté.</p>");
+  $("issues").innerHTML=notes.join("");
+  $("mappedBody").querySelectorAll("input[type=checkbox]").forEach(el=>el.addEventListener("change",()=>mapped[Number(el.dataset.i)].include=el.checked));
+  $("mappedBody").querySelectorAll("input[data-time]").forEach(el=>el.addEventListener("change",()=>{mapped[Number(el.dataset.time)].time=el.value.trim();}));
+}
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+$("prepare").addEventListener("click",()=>{
+  $("message").textContent="Analyse en cours…";
+  build().then(()=>$("message").textContent="Analyse terminée. Aucun envoi ni aucune écriture n'ont été effectués.")
+    .catch(e=>$("message").textContent=e.message);
+});
+$("downloadMapped").addEventListener("click",()=>{
+  const rows=[["twitch_user_id","twitch_login","display_name","badge_date","badge_time","status","pseudo_source"]];
+  for(const r of mapped){
+    if(!r.include)continue;
+    if(!/^\d{2}:\d{2}:\d{2}$/.test(r.time)){alert("Heure invalide pour "+r.pseudo+" le "+r.date+" : "+r.time);return;}
+    rows.push([r.account.id,r.account.login,r.account.display,r.date,r.time,"recorded",r.pseudo]);
+  }
+  download("badgeuse-import-preview-2026-11-08-au-11.csv",rows);
+});
+$("downloadUnresolved").addEventListener("click",()=>{
+  const rows=[["pseudo_source","badge_date","badge_time","cellule_source","statut"]];
+  for(const r of unresolved)rows.push([r.pseudo,r.date,r.time,r.raw,r.status]);
+  download("badgeuse-pseudos-non-resolus.csv",rows);
+});
+</script>
+</body>
+</html>
