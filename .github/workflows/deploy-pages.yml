@@ -1,4 +1,5 @@
 name: Deploy frontend to GitHub Pages
+# Harmless workflow metadata update to retrigger the Pages deployment.
 
 on:
   push:
