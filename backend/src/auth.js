@@ -88,7 +88,6 @@ export async function handleAuthStart(request, env) {
     client_id: env.TWITCH_CLIENT_ID,
     redirect_uri: env.TWITCH_REDIRECT_URI,
     response_type: "code",
-    scope: "",
     state
   });
 
