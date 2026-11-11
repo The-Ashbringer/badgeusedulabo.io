@@ -4,7 +4,7 @@ compatibility_date = "2026-11-11"
 
 # Variables publiques de configuration
 [vars]
-FRONTEND_URL = "https://TON-PSEUDO.github.io/TON-REPO"
+FRONTEND_URL = "https://the-ashbringer.github.io/badgeusedulabo.io"
 TWITCH_REDIRECT_URI = "https://badgeuse-twitch.docarenou.workers.dev/auth/callback"
 TWITCH_CLIENT_ID = "zcontbfpk9eyipgryg8tymcckb0dou"
 SPREADSHEET_ID = "1w3e0HH-H8NYswmVdyYriHEXaUUcUruzaspYUGxLYY44"
