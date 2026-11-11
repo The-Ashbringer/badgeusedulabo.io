@@ -36,5 +36,8 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Run OAuth security tests
+        run: node --test tests/*.test.js
+
       - name: Validate SQLite migrations
         run: python tests/validate_migrations.py
