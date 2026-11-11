@@ -86,6 +86,7 @@ function getErrorStatus(error) {
   const code = error?.message || "";
 
   if (code === "UNAUTHORIZED") return 401;
+  if (code === "SHEET_SYNC_BUSY") return 503;
   if (code === "BADGE_DAY_NOT_AVAILABLE") return 403;
   if (code === "ALREADY_BADGED" || code === "BADGE_PENDING") return 409;
 
