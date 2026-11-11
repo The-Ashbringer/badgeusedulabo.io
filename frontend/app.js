@@ -242,7 +242,7 @@ async function completeTwitchLogin() {
     const loginCode = params.get("auth_code");
 
     if (!loginCode) {
-        return false;
+        return null;
     }
 
     // Retire immédiatement le code temporaire de l'URL.
@@ -497,12 +497,15 @@ async function initializeApp() {
                 : "La connexion Twitch a échoué. Réessaie.",
             "error"
         );
+        return;
     }
 
-    await completeTwitchLogin();
+    const loginResult = await completeTwitchLogin();
 
-    // Vérification de la session
-    checkSession();
+    // Vérification de la session, sauf si l'échange OAuth a échoué.
+    if (loginResult !== false) {
+        checkSession();
+    }
 }
 
 
