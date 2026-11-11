@@ -160,11 +160,11 @@ let allResults=[];
 const statusEl=document.getElementById("status");
 const runBtn=document.getElementById("run");
 const namesEl=document.getElementById("names");
-const initialNames=[...new Set(namesEl.value.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean))];
+const initialNames=[...new Set(namesEl.value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];
 statusEl.textContent="Prêt. "+initialNames.length+" pseudos chargés.";
 const resultsEl=document.getElementById("results");
 const downloadBtn=document.getElementById("download");
-function csvCell(v){const value=String(v??"");const safe=/^[\\t\\r ]*[=+\\-@]/.test(value)?"\'"+value:value;return '"' + safe.replace(/"/g,'""') + '"' ;}
+function csvCell(v){const value=String(v??"");const first=value.trimStart()[0];const safe=["=","+","-","@"].includes(first)?String.fromCharCode(39)+value:value;return '"'+safe.replace(/"/g,'""')+'"';}
 function render(){
  const rows=allResults.map(r=>{
   const candidates=r.channelCandidates||[];
@@ -178,7 +178,7 @@ function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':
 runBtn.addEventListener("click",async()=>{
  const token=sessionStorage.getItem(SESSION_KEY);
  if(!token){statusEl.textContent="Session absente. Connecte-toi d'abord à la badgeuse dans ce même onglet.";return;}
- const names=[...new Set(document.getElementById("names").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];
+ const names=[...new Set(namesEl.value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];
  allResults=[];resultsEl.innerHTML="";downloadBtn.disabled=true;
  try{
   for(let i=0;i<names.length;i+=24){
@@ -201,7 +201,7 @@ downloadBtn.addEventListener("click",()=>{
   else if(r.channelCandidates.length){for(const x of r.channelCandidates)rows.push([r.legacyName,r.status,x.login,x.displayName,x.id]);}
   else rows.push([r.legacyName,r.status,"","",""]);
  }
- const csv="\\uFEFF"+rows.map(row=>row.map(csvCell).join(";")).join("\\r\\n");
+ const csv="\uFEFF"+rows.map(row=>row.map(csvCell).join(";")).join("\r\n");
  const url=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
  const a=document.createElement("a");a.href=url;a.download="correspondances-twitch-a-verifier.csv";a.click();URL.revokeObjectURL(url);
 });
