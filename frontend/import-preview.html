@@ -67,9 +67,10 @@ const $ = id => document.getElementById(id);
 let mapped = [], unresolved = [], invalid = [], issues = [];
 function parseCsv(text){
   text = text.replace(/^\uFEFF/, "");
-  const first = text.split(/\r?\n/,1)[0] || "";
+  const sample = text.split(/\r?\n/).slice(0,12).join("\n");
   const candidates = [";",",","\t"];
-  const delimiter = candidates.sort((a,b)=>(first.split(b).length-first.split(a).length))[0];
+  const counts = candidates.map(d => ({d, n:(sample.split(d).length-1)}));
+  const delimiter = counts.sort((a,b)=>b.n-a.n)[0].d;
   const rows=[]; let row=[], cell="", quoted=false;
   for(let i=0;i<text.length;i++){
     const c=text[i];
@@ -100,7 +101,7 @@ function dateColumns(rows){
   }
   return best;
 }
-function parseClock(raw){
+function parseClock(raw,badgeDate){
   const s=String(raw??"").trim();
   if(!s || /^(abs|repos|\/)$/i.test(s))return {kind:"empty"};
   let h=null,m=0,sec=0;
@@ -115,16 +116,19 @@ function parseClock(raw){
   }
   if(h>23 || m>59 || sec>59)return {kind:"invalid"};
   const offset=s.match(/\bUTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?/i);
-  let date=new Date(Date.UTC(2026,10,8,h,m,sec));
+  let localDate=badgeDate;
   if(offset){
+    const dateParts=badgeDate.split("-").map(Number);
+    let date=new Date(Date.UTC(dateParts[0],dateParts[1]-1,dateParts[2],h,m,sec));
     const sign=offset[1]==="+"?1:-1;
     const off=sign*(Number(offset[2])*60+Number(offset[3]||0));
     date=new Date(date.getTime()-off*60000);
-    const parts=new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/Paris",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"}).formatToParts(date);
-    const get=t=>Number(parts.find(p=>p.type===t).value);
-    h=get("hour");m=get("minute");sec=get("second");
+    const parts=new Intl.DateTimeFormat("en-CA",{timeZone:"Europe/Paris",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"}).formatToParts(date);
+    const get=t=>parts.find(p=>p.type===t).value;
+    localDate=get("year")+"-"+get("month")+"-"+get("day");
+    h=Number(get("hour"));m=Number(get("minute"));sec=Number(get("second"));
   }
-  return {kind:"time",time:[h,m,sec].map(n=>String(n).padStart(2,"0")).join(":"),approx:/environ|environ|≈|~|p'tet|peut-être/i.test(s),offset:!!offset};
+  return {kind:"time",date:localDate,time:[h,m,sec].map(n=>String(n).padStart(2,"0")).join(":"),approx:/environ|≈|~|p'tet|peut-être/i.test(s),offset:!!offset};
 }
 function parseLookup(rows){
   const header=rows.findIndex(r=>r.some(c=>norm(c)==="pseudo_source"));
@@ -161,14 +165,14 @@ function build(){
       const pseudo=String(row[0]||"").trim();if(!pseudo)continue;
       for(const col of columns){
         const raw=String(row[col.col]||"").trim();if(!raw || /^(abs|repos|\/)$/i.test(raw))continue;
-        const parsed=parseClock(raw);
+        const parsed=parseClock(raw,col.date);
         if(parsed.kind==="empty")continue;
         if(parsed.kind==="invalid"){
           invalid.push({pseudo,date:col.date,raw});
           continue;
         }
         const account=lookup.get(norm(pseudo));
-        const record={pseudo,date:col.date,raw,time:parsed.time,approx:parsed.approx,offset:parsed.offset,include:true,account};
+        const record={pseudo,date:parsed.date||col.date,raw,time:parsed.time,approx:parsed.approx,offset:parsed.offset,include:true,account};
         if(account && account.status==="exact_login_match" && account.id && account.login){
           const key=account.id+"|"+col.date;
           if(seen.has(key)){record.duplicate=true;record.include=false;issues.push("Doublon possible : "+pseudo+" le "+col.date+" partage le même compte Twitch qu'une autre ligne.");}
