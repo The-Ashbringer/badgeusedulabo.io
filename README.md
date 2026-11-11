@@ -121,7 +121,7 @@ Avant utilisation :
 2. Se connecter à la badgeuse depuis le même onglet navigateur.
 3. Ouvrir `/admin-lookup.html` dans ce même onglet et lancer la recherche.
 
-L'outil envoie les pseudos par lots de 50 et exporte les résultats en CSV. Il ne modifie ni D1 ni Google Sheets.
+L'outil envoie les pseudos par lots de 24 et exporte les résultats en CSV. Il ne modifie ni D1 ni Google Sheets.
 
 Limites de l'API Twitch :
 - `GET /helix/users?login=` confirme uniquement les logins exacts.
