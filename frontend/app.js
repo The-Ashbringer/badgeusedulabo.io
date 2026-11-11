@@ -12,9 +12,10 @@
 
 const CONFIG = {
     // À remplacer par l'URL du Cloudflare Worker
-    API_URL: "https://TON-WORKER.TON-COMPTE.workers.dev",
+    API_URL: "https://badgeuse-twitch.docarenou.workers.dev",
 
-    TIMEZONE: "Europe/Paris"
+    TIMEZONE: "Europe/Paris",
+    SESSION_KEY: "badgeuse_session"
 };
 
 
@@ -50,6 +51,8 @@ const elements = {
 const state = {
     user: null,
     alreadyBadged: false,
+    pending: false,
+    plannedToday: true,
     isLoading: false,
     isBadging: false
 };
@@ -115,16 +118,29 @@ function setBadgeStatus(message, type = "") {
    APPELS API
 ---------------------------------------- */
 
+function getSessionToken() {
+    return sessionStorage.getItem(CONFIG.SESSION_KEY);
+}
+
+
 async function apiRequest(endpoint, options = {}) {
+    const headers = {
+        "Content-Type": "application/json",
+        ...options.headers
+    };
+
+    const token = getSessionToken();
+
+    if (token && endpoint !== "/auth/exchange") {
+        headers.Authorization = `Bearer ${token}`;
+    }
+
     const response = await fetch(
         `${CONFIG.API_URL}${endpoint}`,
         {
             ...options,
-            credentials: "include",
-            headers: {
-                "Content-Type": "application/json",
-                ...options.headers
-            }
+            credentials: "omit",
+            headers
         }
     );
 
@@ -138,11 +154,11 @@ async function apiRequest(endpoint, options = {}) {
 
     if (!response.ok) {
         const error = new Error(
-            data.message || "Une erreur est survenue."
+            data.message || data.code || "Une erreur est survenue."
         );
 
         error.status = response.status;
-        error.code = data.code;
+        error.code = data.code || data.error;
 
         throw error;
     }
@@ -215,7 +231,49 @@ async function logout() {
     } catch (error) {
         console.error("Erreur de déconnexion :", error);
     } finally {
+        sessionStorage.removeItem(CONFIG.SESSION_KEY);
         displayLoggedOut();
+    }
+}
+
+
+async function completeTwitchLogin() {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const loginCode = params.get("auth_code");
+
+    if (!loginCode) {
+        return null;
+    }
+
+    // Retire immédiatement le code temporaire de l'URL.
+    window.history.replaceState(
+        null,
+        document.title,
+        window.location.pathname + window.location.search
+    );
+
+    try {
+        const result = await apiRequest("/auth/exchange", {
+            method: "POST",
+            body: JSON.stringify({ code: loginCode })
+        });
+
+        if (!result.token || !result.user) {
+            throw new Error("Réponse de connexion incomplète.");
+        }
+
+        sessionStorage.setItem(CONFIG.SESSION_KEY, result.token);
+        showFeedback("Connexion Twitch réussie.", "success");
+        return true;
+
+    } catch (error) {
+        console.error("Échec de l'échange OAuth :", error);
+        sessionStorage.removeItem(CONFIG.SESSION_KEY);
+        showFeedback(
+            error.message || "La connexion Twitch a échoué. Réessaie.",
+            "error"
+        );
+        return false;
     }
 }
 
@@ -226,6 +284,11 @@ async function logout() {
 
 async function checkSession() {
     if (state.isLoading) return;
+
+    if (!getSessionToken()) {
+        displayLoggedOut();
+        return;
+    }
 
     state.isLoading = true;
 
@@ -240,6 +303,8 @@ async function checkSession() {
         displayUser(data.user);
 
         state.alreadyBadged = Boolean(data.alreadyBadged);
+        state.pending = Boolean(data.pending);
+        state.plannedToday = Boolean(data.plannedToday);
 
         if (state.alreadyBadged) {
             setBadgeStatus(
@@ -249,6 +314,21 @@ async function checkSession() {
 
             elements.badgeButton.disabled = true;
             elements.badgeButton.textContent = "Déjà badgé ✓";
+        } else if (state.pending) {
+            setBadgeStatus(
+                "Ton badgeage est en cours de synchronisation.",
+                "pending"
+            );
+
+            elements.badgeButton.disabled = true;
+            elements.badgeButton.textContent = "Enregistrement...";
+        } else if (!state.plannedToday) {
+            setBadgeStatus(
+                "Aucun badgeage n'est prévu aujourd'hui."
+            );
+
+            elements.badgeButton.disabled = true;
+            elements.badgeButton.textContent = "Journée fermée";
         } else {
             setBadgeStatus(
                 "Tu n'as pas encore badgé aujourd'hui."
@@ -261,6 +341,7 @@ async function checkSession() {
 
     } catch (error) {
         if (error.status === 401) {
+            sessionStorage.removeItem(CONFIG.SESSION_KEY);
             displayLoggedOut();
         } else {
             console.error(
@@ -322,7 +403,7 @@ async function submitBadge() {
     } catch (error) {
         console.error("Erreur de pointage :", error);
 
-        if (error.status === 409) {
+        if (error.code === "ALREADY_BADGED") {
             state.alreadyBadged = true;
 
             setBadgeStatus(
@@ -336,6 +417,31 @@ async function submitBadge() {
                 "Un pointage existe déjà pour aujourd'hui.",
                 "success"
             );
+
+        } else if (error.code === "BADGE_PENDING") {
+            state.pending = true;
+
+            setBadgeStatus(
+                "Ton badgeage est en cours de synchronisation.",
+                "pending"
+            );
+
+            elements.badgeButton.disabled = true;
+            elements.badgeButton.textContent = "Enregistrement...";
+
+            showFeedback(
+                "Ton pointage est en cours de traitement. Actualise la page dans quelques instants.",
+                "info"
+            );
+
+        } else if (error.code === "BADGE_DAY_NOT_AVAILABLE") {
+            state.plannedToday = false;
+
+            setBadgeStatus("Aucun badgeage n'est prévu aujourd'hui.");
+            elements.badgeButton.disabled = true;
+            elements.badgeButton.textContent = "Journée fermée";
+
+            showFeedback("Le badgeage n'est pas ouvert aujourd'hui.", "info");
 
         } else {
             elements.badgeButton.disabled = false;
@@ -358,7 +464,7 @@ async function submitBadge() {
    INITIALISATION
 ---------------------------------------- */
 
-function initializeApp() {
+async function initializeApp() {
 
     // Horloge
     updateClock();
@@ -380,8 +486,26 @@ function initializeApp() {
         submitBadge
     );
 
-    // Vérification de la session
-    checkSession();
+    // Échange du code OAuth reçu dans le fragment URL.
+    const params = new URLSearchParams(window.location.search);
+    const authError = params.get("auth");
+
+    if (authError && authError !== "success") {
+        showFeedback(
+            authError === "cancelled"
+                ? "Connexion Twitch annulée."
+                : "La connexion Twitch a échoué. Réessaie.",
+            "error"
+        );
+        return;
+    }
+
+    const loginResult = await completeTwitchLogin();
+
+    // Vérification de la session, sauf si l'échange OAuth a échoué.
+    if (loginResult !== false) {
+        checkSession();
+    }
 }
 
 

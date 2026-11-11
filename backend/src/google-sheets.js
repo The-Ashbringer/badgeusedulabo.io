@@ -75,7 +75,11 @@ function normalizeDate(value) {
   const input = value.trim();
 
   if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
-    return input;
+    const parsed = new Date(`${input}T00:00:00Z`);
+    return !Number.isNaN(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === input
+      ? input
+      : null;
   }
 
   const frenchDate = input.match(
@@ -85,7 +89,13 @@ function normalizeDate(value) {
   if (frenchDate) {
     const [, day, month, year] = frenchDate;
 
-    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    const normalized = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    const parsed = new Date(`${normalized}T00:00:00Z`);
+
+    return !Number.isNaN(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === normalized
+      ? normalized
+      : null;
   }
 
   return null;
@@ -334,42 +344,57 @@ export async function getPlanning(env) {
     throw new Error("INVALID_PLANNING_PERIOD");
   }
 
-  const dates = [];
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  const dayCount = Math.round((end - start) / 86400000) + 1;
+
+  if (dayCount < 1 || dayCount > 14) {
+    throw new Error("PLANNING_PERIOD_MUST_BE_1_TO_14_DAYS");
+  }
+
+  const configuredByDate = new Map();
 
   for (const row of planningRows) {
     const date = normalizeDate(row[0]);
+    if (!date || date < startDate || date > endDate) continue;
 
-    if (!date) continue;
-
-    if (date < startDate || date > endDate) {
-      continue;
+    if (configuredByDate.has(date)) {
+      throw new Error("DUPLICATE_PLANNING_DATE");
     }
 
-    const enabled =
-      row[1] === true ||
-      String(row[1]).toUpperCase() === "TRUE";
+    const rawEnabled = row[1];
+    const normalizedEnabled = String(rawEnabled).trim().toUpperCase();
 
-    dates.push({
+    if (
+      rawEnabled !== true &&
+      rawEnabled !== false &&
+      normalizedEnabled !== "TRUE" &&
+      normalizedEnabled !== "FALSE"
+    ) {
+      throw new Error("INVALID_PLANNING_ENABLED_VALUE");
+    }
+
+    configuredByDate.set(date, {
       date,
-      enabled
+      enabled: rawEnabled === true || normalizedEnabled === "TRUE"
     });
   }
 
-  if (dates.length === 0 || dates.length > 14) {
-    throw new Error("INVALID_PLANNING_DATES");
+  const dates = [];
+
+  for (let offset = 0; offset < dayCount; offset++) {
+    const date = new Date(start.getTime() + offset * 86400000)
+      .toISOString()
+      .slice(0, 10);
+
+    const configured = configuredByDate.get(date);
+
+    if (!configured) {
+      throw new Error("MISSING_PLANNING_DATE");
+    }
+
+    dates.push(configured);
   }
-
-  const uniqueDates = new Set(
-    dates.map(item => item.date)
-  );
-
-  if (uniqueDates.size !== dates.length) {
-    throw new Error("DUPLICATE_PLANNING_DATE");
-  }
-
-  dates.sort((a, b) =>
-    a.date.localeCompare(b.date)
-  );
 
   return {
     startDate,
@@ -500,121 +525,167 @@ function buildGrid(planning, users, badgeMap) {
    SYNCHRONISATION DE LA GRILLE
 ===================================================== */
 
-export async function syncBadgeuse(env) {
-  const badgeuseTab = getTabName(
-    env,
-    "SHEET_TAB",
-    DEFAULT_BADGEUSE_TAB
-  );
-
-  const planning = await getPlanning(env);
-
-  const sheetId = await getSheetId(
-    badgeuseTab,
-    env
-  );
-
-  const sheets = await getSheetMetadata(env);
-
-  const sheet = sheets.find(
-    item => item.properties.sheetId === sheetId
-  );
-
-  const currentRows =
-    sheet.properties.gridProperties.rowCount;
-
-  const currentColumns =
-    sheet.properties.gridProperties.columnCount;
-
-  const { users, badgeMap } = await getGridData(
-    env,
-    planning
-  );
-
-  const grid = buildGrid(
-    planning,
-    users,
-    badgeMap
-  );
-
-  const requiredRows = Math.max(
-    currentRows,
-    users.length + 2
-  );
-
-  const requiredColumns = Math.max(
-    currentColumns,
-    planning.dates.length + 1
-  );
-
-  const requests = [];
-
-  // Extension automatique de la grille si nécessaire.
-  if (
-    requiredRows !== currentRows ||
-    requiredColumns !== currentColumns
-  ) {
-    requests.push({
-      updateSheetProperties: {
-        properties: {
-          sheetId,
-          gridProperties: {
-            rowCount: requiredRows,
-            columnCount: requiredColumns
-          }
-        },
-        fields: "gridProperties.rowCount,gridProperties.columnCount"
-      }
-    });
+export async function syncBadgeuse(env, targetUserId = null) {
+  if (!env.DB) {
+    throw new Error("D1_DATABASE_MISSING");
   }
 
-  // Effacement des anciennes valeurs de la grille,
-  // sans toucher aux formats ni au titre de la ligne 1.
-  requests.push({
-    updateCells: {
-      range: {
-        sheetId,
-        startRowIndex: 1,
-        endRowIndex: requiredRows,
-        startColumnIndex: 0,
-        endColumnIndex: requiredColumns
-      },
-      fields: "userEnteredValue"
+  // Verrou D1 : une seule reconstruction complète de la grille à la fois.
+  const lockToken = crypto.randomUUID();
+  const lockExpiresAt = Math.floor(Date.now() / 1000) + 300;
+  let acquired = false;
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const lock = await env.DB.prepare(`
+      INSERT INTO sync_locks (lock_name, lock_token, expires_at)
+      VALUES ('badgeuse_grid', ?, ?)
+      ON CONFLICT(lock_name) DO UPDATE SET
+        lock_token = excluded.lock_token,
+        expires_at = excluded.expires_at
+      WHERE sync_locks.expires_at <= ?
+      RETURNING lock_token
+    `).bind(
+      lockToken,
+      lockExpiresAt,
+      Math.floor(Date.now() / 1000)
+    ).first();
+
+    if (lock?.lock_token === lockToken) {
+      acquired = true;
+      break;
     }
-  });
 
-  // Réécriture des en-têtes et utilisateurs.
-  requests.push({
-    updateCells: {
-      start: {
-        sheetId,
-        rowIndex: 1,
-        columnIndex: 0
-      },
-      rows: grid.map(row => ({
-        values: row.map(value => ({
-          userEnteredValue: {
-            stringValue: String(value)
-          }
-        }))
-      })),
-      fields: "userEnteredValue"
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+
+  if (!acquired) {
+    throw new Error("SHEET_SYNC_BUSY");
+  }
+
+  try {
+    const badgeuseTab = getTabName(
+      env,
+      "SHEET_TAB",
+      DEFAULT_BADGEUSE_TAB
+    );
+
+    const planning = await getPlanning(env);
+
+    const sheetId = await getSheetId(
+      badgeuseTab,
+      env
+    );
+
+    const sheets = await getSheetMetadata(env);
+
+    const sheet = sheets.find(
+      item => item.properties.sheetId === sheetId
+    );
+
+    const currentRows =
+      sheet.properties.gridProperties.rowCount;
+
+    const currentColumns =
+      sheet.properties.gridProperties.columnCount;
+
+    const { users, badgeMap } = await getGridData(
+      env,
+      planning
+    );
+
+    const grid = buildGrid(
+      planning,
+      users,
+      badgeMap
+    );
+
+    const requiredRows = Math.max(
+      currentRows,
+      users.length + 2
+    );
+
+    // La grille utilise A:O au maximum (pseudo + 14 jours).
+    // Les éventuelles colonnes au-delà de O sont conservées.
+    const requiredColumns = Math.max(currentColumns, 15);
+
+    const requests = [];
+
+    if (
+      requiredRows !== currentRows ||
+      requiredColumns !== currentColumns
+    ) {
+      requests.push({
+        updateSheetProperties: {
+          properties: {
+            sheetId,
+            gridProperties: {
+              rowCount: requiredRows,
+              columnCount: requiredColumns
+            }
+          },
+          fields: "gridProperties.rowCount,gridProperties.columnCount"
+        }
+      });
     }
-  });
 
-  await googleRequest(":batchUpdate", env, {
-    method: "POST",
-    body: JSON.stringify({
-      requests
-    })
-  });
+    requests.push({
+      updateCells: {
+        range: {
+          sheetId,
+          startRowIndex: 1,
+          endRowIndex: requiredRows,
+          startColumnIndex: 0,
+          endColumnIndex: 15
+        },
+        fields: "userEnteredValue"
+      }
+    });
 
-  return {
-    success: true,
-    usersCount: users.length,
-    datesCount: planning.dates.length,
-    sheetId
-  };
+    requests.push({
+      updateCells: {
+        start: {
+          sheetId,
+          rowIndex: 1,
+          columnIndex: 0
+        },
+        rows: grid.map(row => ({
+          values: row.map(value => ({
+            userEnteredValue: {
+              stringValue: String(value)
+            }
+          }))
+        })),
+        fields: "userEnteredValue"
+      }
+    });
+
+    await googleRequest(":batchUpdate", env, {
+      method: "POST",
+      body: JSON.stringify({ requests })
+    });
+
+    const targetIndex = targetUserId == null
+      ? -1
+      : users.findIndex(user => user.twitch_user_id === String(targetUserId));
+
+    return {
+      success: true,
+      usersCount: users.length,
+      datesCount: planning.dates.length,
+      sheetId,
+      ...(targetUserId == null ? {} : {
+        sheetRow: targetIndex === -1 ? null : targetIndex + 3
+      })
+    };
+  } finally {
+    // Libération conditionnelle : ne jamais supprimer le verrou
+    // éventuellement repris après expiration par une autre requête.
+    await env.DB.prepare(`
+      DELETE FROM sync_locks
+      WHERE lock_name = 'badgeuse_grid'
+        AND lock_token = ?
+    `).bind(lockToken).run();
+  }
 }
 
 /* =====================================================
@@ -655,22 +726,16 @@ export async function recordBadge(
     throw new Error("BADGE_NOT_FOUND_IN_DATABASE");
   }
 
-  const syncResult = await syncBadgeuse(env);
+  const syncResult = await syncBadgeuse(env, userId);
 
-  const { users } = await getGridData(env, planning);
-
-  const userIndex = users.findIndex(
-    user => user.twitch_user_id === String(userId)
-  );
-
-  if (userIndex === -1) {
+  if (!syncResult.sheetRow) {
     throw new Error("BADGE_USER_NOT_FOUND");
   }
 
   return {
     success: true,
     time: badge.badge_time,
-    sheetRow: userIndex + 3,
+    sheetRow: syncResult.sheetRow,
     ...syncResult
   };
 }

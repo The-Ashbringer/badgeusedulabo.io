@@ -1,331 +1,310 @@
-
 import {
   exchangeAuthorizationCode,
   validateAccessToken,
   getTwitchUser
 } from "./twitch.js";
 
-const SESSION_COOKIE = "labo_session";
 const SESSION_DURATION = 7 * 24 * 60 * 60;
 const OAUTH_STATE_DURATION = 10 * 60;
+const LOGIN_CODE_DURATION = 2 * 60;
 
-/**
- * Génère une chaîne aléatoire sécurisée.
- */
 function randomString(length = 32) {
-  const bytes = crypto.getRandomValues(
-    new Uint8Array(length)
-  );
-
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
   return Array.from(bytes)
     .map(byte => byte.toString(16).padStart(2, "0"))
     .join("");
 }
 
-/**
- * Encode une chaîne en Base64 URL-safe.
- */
-function base64UrlEncode(value) {
-  const bytes = new TextEncoder().encode(value);
+async function hashToken(value) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value)
+  );
 
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
+  return Array.from(new Uint8Array(digest))
+    .map(byte => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-/**
- * Décode une chaîne Base64 URL-safe.
- */
-function base64UrlDecode(value) {
-  const normalized = value
-    .replace(/-/g, "+")
-    .replace(/_/g, "/");
-
-  const padded = normalized.padEnd(
-    Math.ceil(normalized.length / 4) * 4,
-    "="
-  );
-
-  const binary = atob(padded);
-
-  const bytes = Uint8Array.from(
-    binary,
-    character => character.charCodeAt(0)
-  );
-
-  return new TextDecoder().decode(bytes);
+function getDatabase(env) {
+  if (!env.DB) throw new Error("D1_DATABASE_MISSING");
+  return env.DB;
 }
 
-/**
- * Importe la clé de signature des sessions.
- */
-async function getSigningKey(env) {
-  if (!env.SESSION_SECRET) {
-    throw new Error("SESSION_SECRET_MISSING");
-  }
-
-  return crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(env.SESSION_SECRET),
-    {
-      name: "HMAC",
-      hash: "SHA-256"
-    },
-    false,
-    ["sign", "verify"]
-  );
+function getBearerToken(request) {
+  const authorization = request.headers.get("Authorization") || "";
+  const match = authorization.match(/^Bearer\s+([a-f0-9]{64})$/i);
+  return match ? match[1] : null;
 }
 
-/**
- * Crée une session signée.
- */
-async function createSession(user, env) {
-  const payload = {
-    id: user.id,
-    login: user.login,
-    displayName: user.displayName,
-    profileImageUrl: user.profileImageUrl,
-    exp: Math.floor(Date.now() / 1000) + SESSION_DURATION
-  };
-
-  const encodedPayload = base64UrlEncode(
-    JSON.stringify(payload)
-  );
-
-  const key = await getSigningKey(env);
-
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(encodedPayload)
-  );
-
-  const encodedSignature = base64UrlEncode(
-    String.fromCharCode(...new Uint8Array(signature))
-  );
-
-  return `${encodedPayload}.${encodedSignature}`;
-}
-
-/**
- * Vérifie une session signée.
- */
-async function verifySession(token, env) {
-  try {
-    const parts = token.split(".");
-
-    if (parts.length !== 2) {
-      return null;
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store"
     }
-
-    const [payload, signature] = parts;
-
-    const key = await getSigningKey(env);
-
-    const signatureBytes = Uint8Array.from(
-      atob(
-        signature
-          .replace(/-/g, "+")
-          .replace(/_/g, "/")
-          .padEnd(
-            Math.ceil(signature.length / 4) * 4,
-            "="
-          )
-      ),
-      character => character.charCodeAt(0)
-    );
-
-    const valid = await crypto.subtle.verify(
-      "HMAC",
-      key,
-      signatureBytes,
-      new TextEncoder().encode(payload)
-    );
-
-    if (!valid) {
-      return null;
-    }
-
-    const session = JSON.parse(
-      base64UrlDecode(payload)
-    );
-
-    if (!session.exp || session.exp <= Date.now() / 1000) {
-      return null;
-    }
-
-    return session;
-  } catch {
-    return null;
-  }
+  });
 }
 
 /**
- * Récupère le cookie de session.
- */
-function getCookie(request, name) {
-  const cookies = request.headers.get("Cookie") || "";
-
-  const cookie = cookies
-    .split(";")
-    .map(value => value.trim())
-    .find(value => value.startsWith(`${name}=`));
-
-  return cookie
-    ? cookie.substring(name.length + 1)
-    : null;
-}
-
-/**
- * Retourne les informations de session.
+ * Récupère la session depuis un jeton Bearer opaque.
+ * Seul le hash SHA-256 du jeton est conservé dans D1.
  */
 export async function getSession(request, env) {
-  const token = getCookie(request, SESSION_COOKIE);
+  const token = getBearerToken(request);
+  if (!token) return null;
 
-  if (!token) {
-    return null;
-  }
+  const tokenHash = await hashToken(token);
+  const now = Math.floor(Date.now() / 1000);
 
-  return verifySession(token, env);
+  const session = await getDatabase(env).prepare(`
+    SELECT
+      twitch_user_id AS id,
+      twitch_login AS login,
+      display_name AS displayName,
+      profile_image_url AS profileImageUrl
+    FROM auth_sessions
+    WHERE token_hash = ?
+      AND expires_at > ?
+  `).bind(tokenHash, now).first();
+
+  return session || null;
 }
 
 /**
- * Démarre l'authentification Twitch.
+ * Démarre le flux OAuth Twitch.
+ */
+function getCookie(request, name) {
+  const cookieHeader = request.headers.get("Cookie") || "";
+  const prefix = `${name}=`;
+
+  for (const part of cookieHeader.split(";")) {
+    const cookie = part.trim();
+    if (cookie.startsWith(prefix)) {
+      return cookie.slice(prefix.length);
+    }
+  }
+
+  return null;
+}
+
+function clearOAuthStateCookie() {
+  return "badgeuse_oauth_state=; Path=/auth/callback; Max-Age=0; HttpOnly; Secure; SameSite=Lax";
+}
+
+function redirectWithClearedCookie(url) {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: url,
+      "Set-Cookie": clearOAuthStateCookie(),
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer"
+    }
+  });
+}
+
+/**
+ * Démarre le flux OAuth Twitch.
+ * Le cookie HttpOnly lie le state au navigateur initiateur.
  */
 export async function handleAuthStart(request, env) {
-  if (!env.OAUTH_KV) {
-    throw new Error("OAUTH_KV_MISSING");
-  }
+  if (!env.OAUTH_KV) throw new Error("OAUTH_KV_MISSING");
 
   const state = randomString();
 
-  await env.OAUTH_KV.put(
-    `oauth:${state}`,
-    "valid",
-    {
-      expirationTtl: OAUTH_STATE_DURATION
-    }
-  );
+  await env.OAUTH_KV.put(`oauth:${state}`, "valid", {
+    expirationTtl: OAUTH_STATE_DURATION
+  });
 
   const params = new URLSearchParams({
     client_id: env.TWITCH_CLIENT_ID,
     redirect_uri: env.TWITCH_REDIRECT_URI,
     response_type: "code",
-    scope: "",
     state
   });
 
-  return Response.redirect(
-    `https://id.twitch.tv/oauth2/authorize?${params}`,
-    302
-  );
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: `https://id.twitch.tv/oauth2/authorize?${params}`,
+      "Set-Cookie": `badgeuse_oauth_state=${state}; Path=/auth/callback; Max-Age=${OAUTH_STATE_DURATION}; HttpOnly; Secure; SameSite=Lax`,
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer"
+    }
+  });
 }
 
 /**
- * Traite le retour de Twitch après authentification.
+ * Retour OAuth Twitch : valide un state lié au navigateur,
+ * puis crée un code temporaire à usage unique.
  */
 export async function handleAuthCallback(request, env) {
   const url = new URL(request.url);
-
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const twitchError = url.searchParams.get("error");
+  const browserState = getCookie(request, "badgeuse_oauth_state");
 
-  if (twitchError) {
-    return Response.redirect(
-      `${env.FRONTEND_URL}?auth=cancelled`,
-      302
-    );
+  if (!state || !browserState || state !== browserState) {
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=invalid_state`);
   }
 
-  if (!code || !state) {
-    return Response.redirect(
-      `${env.FRONTEND_URL}?auth=error`,
-      302
-    );
-  }
+  if (!env.OAUTH_KV) throw new Error("OAUTH_KV_MISSING");
 
   const stateKey = `oauth:${state}`;
-
   const savedState = await env.OAUTH_KV.get(stateKey);
 
   if (!savedState) {
-    return Response.redirect(
-      `${env.FRONTEND_URL}?auth=invalid_state`,
-      302
-    );
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=invalid_state`);
   }
 
-  // Le state est supprimé avant de poursuivre :
-  // il ne peut donc pas être réutilisé.
+  // Consommation du state : il ne peut servir qu'une fois.
   await env.OAUTH_KV.delete(stateKey);
 
+  if (twitchError) {
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=cancelled`);
+  }
+
+  if (!code) {
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=error`);
+  }
+
   try {
-    const tokenData = await exchangeAuthorizationCode(
-      code,
-      env
-    );
+    const tokenData = await exchangeAuthorizationCode(code, env);
+    const validation = await validateAccessToken(tokenData.access_token, env);
 
-    const validation = await validateAccessToken(
-      tokenData.access_token,
-      env
-    );
+    if (!validation) throw new Error("TWITCH_TOKEN_INVALID");
 
-    if (!validation) {
-      throw new Error("TWITCH_TOKEN_INVALID");
-    }
+    const user = await getTwitchUser(tokenData.access_token, env);
+    const loginCode = randomString(32);
+    const codeHash = await hashToken(loginCode);
+    const now = Math.floor(Date.now() / 1000);
+    const db = getDatabase(env);
 
-    const user = await getTwitchUser(
-      tokenData.access_token,
-      env
-    );
+    await db.prepare(`
+      DELETE FROM auth_codes WHERE expires_at <= ?
+    `).bind(now).run();
 
-    const sessionToken = await createSession(user, env);
+    await db.prepare(`
+      DELETE FROM auth_sessions WHERE expires_at <= ?
+    `).bind(now).run();
 
-    const headers = new Headers({
-      Location: `${env.FRONTEND_URL}?auth=success`,
-      "Set-Cookie":
-        `${SESSION_COOKIE}=${sessionToken}; ` +
-        `HttpOnly; Secure; SameSite=None; Path=/; ` +
-        `Max-Age=${SESSION_DURATION}`
-    });
+    await db.prepare(`
+      INSERT INTO auth_codes (
+        code_hash,
+        twitch_user_id,
+        twitch_login,
+        display_name,
+        profile_image_url,
+        expires_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      codeHash,
+      String(user.id),
+      user.login,
+      user.displayName,
+      user.profileImageUrl || null,
+      now + LOGIN_CODE_DURATION
+    ).run();
 
-    return new Response(null, {
-      status: 302,
-      headers
-    });
+    const destination = new URL(env.FRONTEND_URL);
+    destination.hash = `auth_code=${loginCode}`;
+
+    return redirectWithClearedCookie(destination.toString());
   } catch (error) {
     console.error("OAuth callback error:", error);
-
-    return Response.redirect(
-      `${env.FRONTEND_URL}?auth=error`,
-      302
-    );
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=error`);
   }
 }
 
 /**
- * Déconnecte l'utilisateur.
+ * Échange atomiquement un code de connexion contre une session.
+ * DELETE ... RETURNING empêche la réutilisation du code.
+ */
+export async function handleAuthExchange(request, env) {
+  let body;
+
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ code: "INVALID_REQUEST", message: "Requête invalide." }, 400);
+  }
+
+  const loginCode = body?.code;
+  if (typeof loginCode !== "string" || !/^[a-f0-9]{64}$/i.test(loginCode)) {
+    return jsonResponse({ code: "INVALID_LOGIN_CODE", message: "Code de connexion invalide." }, 400);
+  }
+
+  const db = getDatabase(env);
+  const codeHash = await hashToken(loginCode);
+  const now = Math.floor(Date.now() / 1000);
+
+  const login = await db.prepare(`
+    DELETE FROM auth_codes
+    WHERE code_hash = ?
+      AND expires_at > ?
+    RETURNING
+      twitch_user_id,
+      twitch_login,
+      display_name,
+      profile_image_url
+  `).bind(codeHash, now).first();
+
+  if (!login) {
+    return jsonResponse({ code: "LOGIN_CODE_EXPIRED", message: "Le code de connexion a expiré. Recommence la connexion Twitch." }, 401);
+  }
+
+  const sessionToken = randomString(32);
+  const tokenHash = await hashToken(sessionToken);
+
+  await db.prepare(`
+    INSERT INTO auth_sessions (
+      token_hash,
+      twitch_user_id,
+      twitch_login,
+      display_name,
+      profile_image_url,
+      expires_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(
+    tokenHash,
+    login.twitch_user_id,
+    login.twitch_login,
+    login.display_name,
+    login.profile_image_url,
+    now + SESSION_DURATION
+  ).run();
+
+  return jsonResponse({
+    token: sessionToken,
+    expiresIn: SESSION_DURATION,
+    user: {
+      id: login.twitch_user_id,
+      login: login.twitch_login,
+      displayName: login.display_name,
+      profileImageUrl: login.profile_image_url
+    }
+  });
+}
+
+/**
+ * Révoque la session courante.
  */
 export async function handleLogout(request, env) {
-  return new Response(
-    JSON.stringify({
-      success: true
-    }),
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Set-Cookie":
-          `${SESSION_COOKIE}=; ` +
-          "HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0"
-      }
-    }
-  );
+  const token = getBearerToken(request);
+
+  if (token) {
+    const tokenHash = await hashToken(token);
+
+    await getDatabase(env).prepare(`
+      DELETE FROM auth_sessions
+      WHERE token_hash = ?
+    `).bind(tokenHash).run();
+  }
+
+  return jsonResponse({ success: true });
 }

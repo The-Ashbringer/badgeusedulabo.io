@@ -87,11 +87,24 @@ export async function getBadge(userId, date, env) {
  * Vérifie si l'utilisateur a déjà badgé.
  */
 export async function getBadgeStatus(userId, date, env) {
-  const badge = await getBadge(userId, date, env);
+  const db = getDatabase(env);
+
+  const badge = await db.prepare(`
+    SELECT *,
+      CASE
+        WHEN status = 'pending'
+          AND julianday(updated_at) >= julianday('now', '-2 minutes')
+        THEN 1
+        ELSE 0
+      END AS active_pending
+    FROM badges
+    WHERE twitch_user_id = ?
+      AND badge_date = ?
+  `).bind(String(userId), date).first();
 
   return {
     hasBadged: badge?.status === "recorded",
-    pending: badge?.status === "pending",
+    pending: Boolean(badge?.active_pending),
     badge: badge || null
   };
 }
@@ -120,9 +133,10 @@ export async function reserveBadge(
       twitch_user_id,
       badge_date,
       badge_time,
-      status
+      status,
+      attempt_count
     )
-    VALUES (?, ?, ?, 'pending')
+    VALUES (?, ?, ?, 'pending', 1)
     ON CONFLICT(twitch_user_id, badge_date)
     DO NOTHING
   `).bind(id, date, time).run();
@@ -150,25 +164,26 @@ export async function reserveBadge(
     };
   }
 
-  if (existing.status === "pending") {
-    return {
-      success: false,
-      status: "already_pending",
-      badge: existing
-    };
-  }
-
-  // Reprise d'un badge précédemment échoué.
-  if (existing.status === "failed") {
+  // Reprise d'un badge échoué ou d'une réservation pending
+  // abandonnée depuis plus de deux minutes (crash/interruption Worker).
+  if (existing.status === "failed" || existing.status === "pending") {
     const retry = await db.prepare(`
       UPDATE badges
       SET
         badge_time = ?,
         status = 'pending',
+        attempt_count = attempt_count + 1,
+        last_error = NULL,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE twitch_user_id = ?
         AND badge_date = ?
-        AND status = 'failed'
+        AND (
+          status = 'failed'
+          OR (
+            status = 'pending'
+            AND julianday(updated_at) < julianday('now', '-2 minutes')
+          )
+        )
     `).bind(time, id, date).run();
 
     if (retry.meta?.changes > 0) {
@@ -179,7 +194,6 @@ export async function reserveBadge(
       };
     }
 
-    // Une autre requête a probablement repris le badge.
     return {
       success: false,
       status: "already_pending",
@@ -206,6 +220,7 @@ export async function markBadgeRecorded(
     SET
       status = 'recorded',
       sheet_row = ?,
+      last_error = NULL,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE twitch_user_id = ?
       AND badge_date = ?
@@ -226,6 +241,7 @@ export async function markBadgeRecorded(
 export async function markBadgeFailed(
   userId,
   date,
+  error,
   env
 ) {
   const db = getDatabase(env);
@@ -234,11 +250,13 @@ export async function markBadgeFailed(
     UPDATE badges
     SET
       status = 'failed',
+      last_error = ?,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE twitch_user_id = ?
       AND badge_date = ?
       AND status = 'pending'
   `).bind(
+    String(error?.message || error || "UNKNOWN_ERROR").slice(0, 500),
     String(userId),
     date
   ).run();

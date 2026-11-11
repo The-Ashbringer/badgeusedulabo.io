@@ -1,21 +1,23 @@
-
 name = "badgeuse-twitch"
 main = "src/index.js"
 compatibility_date = "2026-11-11"
 
 # Variables publiques de configuration
 [vars]
-FRONTEND_URL = "https://TON-PSEUDO.github.io/TON-REPO"
-TWITCH_REDIRECT_URI = "https://badgeuse-twitch.TON-COMPTE.workers.dev/auth/callback"
+FRONTEND_URL = "https://the-ashbringer.github.io/badgeusedulabo.io"
+TWITCH_REDIRECT_URI = "https://badgeuse-twitch.docarenou.workers.dev/auth/callback"
+TWITCH_CLIENT_ID = "zcontbfpk9eyipgryg8tymcckb0dou"
+SPREADSHEET_ID = "1w3e0HH-H8NYswmVdyYriHEXaUUcUruzaspYUGxLYY44"
 SHEET_TAB = "BADGEUSE"
+CONFIG_TAB = "CONFIG"
 
 # Stockage temporaire pour les états OAuth
 [[kv_namespaces]]
 binding = "OAUTH_KV"
-id = "A_REMPLACER_PAR_ID_KV"
+id = "9171642d93464c2c9802aa63b064a95e"
 
 # Base de données pour l'historique et l'unicité des badges
 [[d1_databases]]
 binding = "DB"
 database_name = "badgeuse-twitch"
-database_id = "A_REMPLACER_PAR_ID_D1"
+database_id = "74c79c2c-cb69-4a98-a354-5c0998042093"

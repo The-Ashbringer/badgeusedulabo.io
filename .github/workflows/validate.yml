@@ -1,0 +1,43 @@
+name: Validate project
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in backend/src/*.js frontend/app.js; do
+            echo "Checking $file"
+            node --input-type=module --check < "$file"
+          done
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run OAuth security tests
+        run: node --test tests/*.test.js
+
+      - name: Validate SQLite migrations
+        run: python tests/validate_migrations.py
