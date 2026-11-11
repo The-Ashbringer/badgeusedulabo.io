@@ -75,6 +75,40 @@ export async function getSession(request, env) {
 /**
  * Démarre le flux OAuth Twitch.
  */
+function getCookie(request, name) {
+  const cookieHeader = request.headers.get("Cookie") || "";
+  const prefix = `${name}=`;
+
+  for (const part of cookieHeader.split(";")) {
+    const cookie = part.trim();
+    if (cookie.startsWith(prefix)) {
+      return cookie.slice(prefix.length);
+    }
+  }
+
+  return null;
+}
+
+function clearOAuthStateCookie() {
+  return "badgeuse_oauth_state=; Path=/auth/callback; Max-Age=0; HttpOnly; Secure; SameSite=Lax";
+}
+
+function redirectWithClearedCookie(url) {
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: url,
+      "Set-Cookie": clearOAuthStateCookie(),
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer"
+    }
+  });
+}
+
+/**
+ * Démarre le flux OAuth Twitch.
+ * Le cookie HttpOnly lie le state au navigateur initiateur.
+ */
 export async function handleAuthStart(request, env) {
   if (!env.OAUTH_KV) throw new Error("OAUTH_KV_MISSING");
 
@@ -91,28 +125,30 @@ export async function handleAuthStart(request, env) {
     state
   });
 
-  return Response.redirect(
-    `https://id.twitch.tv/oauth2/authorize?${params}`,
-    302
-  );
+  return new Response(null, {
+    status: 302,
+    headers: {
+      Location: `https://id.twitch.tv/oauth2/authorize?${params}`,
+      "Set-Cookie": `badgeuse_oauth_state=${state}; Path=/auth/callback; Max-Age=${OAUTH_STATE_DURATION}; HttpOnly; Secure; SameSite=Lax`,
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer"
+    }
+  });
 }
 
 /**
- * Retour OAuth Twitch : crée un code temporaire à usage unique.
- * Le code est transmis dans le fragment URL, jamais dans une requête HTTP.
+ * Retour OAuth Twitch : valide un state lié au navigateur,
+ * puis crée un code temporaire à usage unique.
  */
 export async function handleAuthCallback(request, env) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
   const twitchError = url.searchParams.get("error");
+  const browserState = getCookie(request, "badgeuse_oauth_state");
 
-  if (twitchError) {
-    return Response.redirect(`${env.FRONTEND_URL}?auth=cancelled`, 302);
-  }
-
-  if (!code || !state) {
-    return Response.redirect(`${env.FRONTEND_URL}?auth=error`, 302);
+  if (!state || !browserState || state !== browserState) {
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=invalid_state`);
   }
 
   if (!env.OAUTH_KV) throw new Error("OAUTH_KV_MISSING");
@@ -121,10 +157,19 @@ export async function handleAuthCallback(request, env) {
   const savedState = await env.OAUTH_KV.get(stateKey);
 
   if (!savedState) {
-    return Response.redirect(`${env.FRONTEND_URL}?auth=invalid_state`, 302);
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=invalid_state`);
   }
 
+  // Consommation du state : il ne peut servir qu'une fois.
   await env.OAUTH_KV.delete(stateKey);
+
+  if (twitchError) {
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=cancelled`);
+  }
+
+  if (!code) {
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=error`);
+  }
 
   try {
     const tokenData = await exchangeAuthorizationCode(code, env);
@@ -138,7 +183,6 @@ export async function handleAuthCallback(request, env) {
     const now = Math.floor(Date.now() / 1000);
     const db = getDatabase(env);
 
-    // Nettoyage opportuniste des codes et sessions expirés.
     await db.prepare(`
       DELETE FROM auth_codes WHERE expires_at <= ?
     `).bind(now).run();
@@ -169,17 +213,10 @@ export async function handleAuthCallback(request, env) {
     const destination = new URL(env.FRONTEND_URL);
     destination.hash = `auth_code=${loginCode}`;
 
-    return new Response(null, {
-      status: 302,
-      headers: {
-        Location: destination.toString(),
-        "Cache-Control": "no-store",
-        "Referrer-Policy": "no-referrer"
-      }
-    });
+    return redirectWithClearedCookie(destination.toString());
   } catch (error) {
     console.error("OAuth callback error:", error);
-    return Response.redirect(`${env.FRONTEND_URL}?auth=error`, 302);
+    return redirectWithClearedCookie(`${env.FRONTEND_URL}?auth=error`);
   }
 }
 
