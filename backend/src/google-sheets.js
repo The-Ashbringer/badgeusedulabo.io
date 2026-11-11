@@ -89,7 +89,13 @@ function normalizeDate(value) {
   if (frenchDate) {
     const [, day, month, year] = frenchDate;
 
-    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    const normalized = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    const parsed = new Date(`${normalized}T00:00:00Z`);
+
+    return !Number.isNaN(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === normalized
+      ? normalized
+      : null;
   }
 
   return null;
