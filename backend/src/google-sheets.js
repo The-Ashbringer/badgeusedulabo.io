@@ -1,756 +1,676 @@
 
 /**
- * BADGEUSE DU LABO
- * Intégration Google Sheets
+ * google-sheets.js
  *
- * Fichier : backend/src/google-sheets.js
+ * Synchronisation entre D1 et Google Sheets.
+ *
+ * Onglet BADGEUSE :
+ *   Ligne 1 : titre (préservé)
+ *   Ligne 2 : pseudo + dates
+ *   Ligne 3+ : utilisateurs triés alphabétiquement
+ *
+ * Onglet CONFIG :
+ *   C2 : date de début
+ *   C3 : date de fin
+ *   C5 : fuseau horaire
+ *   A8:B21 : dates et journées prévues
  */
 
-const GOOGLE_TOKEN_URL =
-    "https://oauth2.googleapis.com/token";
+const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GOOGLE_SCOPE =
+  "https://www.googleapis.com/auth/spreadsheets";
 
-const GOOGLE_API =
-    "https://sheets.googleapis.com/v4/spreadsheets";
+const DEFAULT_BADGEUSE_TAB = "BADGEUSE";
+const DEFAULT_CONFIG_TAB = "CONFIG";
+const TIMEZONE = "Europe/Paris";
 
-const SHEET_RANGE = "A1:Q1014";
-const TOTAL_COLUMNS = 17;
+let cachedToken = null;
+let tokenExpiration = 0;
 
-// Cache temporaire du token Google.
-let cachedGoogleToken = null;
-let googleTokenExpiry = 0;
+/* =====================================================
+   OUTILS GÉNÉRAUX
+===================================================== */
 
+function base64UrlEncode(bytes) {
+  let binary = "";
 
-/* ========================================
-   AUTHENTIFICATION GOOGLE
-======================================== */
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
 
-function base64UrlEncode(value) {
-    const bytes = typeof value === "string"
-        ? new TextEncoder().encode(value)
-        : value;
-
-    let binary = "";
-
-    for (const byte of bytes) {
-        binary += String.fromCharCode(byte);
-    }
-
-    return btoa(binary)
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/g, "");
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
-
-function pemToArrayBuffer(pem) {
-    const base64 = pem
-        .replace(/-----BEGIN PRIVATE KEY-----/g, "")
-        .replace(/-----END PRIVATE KEY-----/g, "")
-        .replace(/\s/g, "");
-
-    const binary = atob(base64);
-
-    const bytes = Uint8Array.from(
-        binary,
-        character => character.charCodeAt(0)
-    );
-
-    return bytes.buffer;
+function stringToBase64Url(value) {
+  return base64UrlEncode(
+    new TextEncoder().encode(value)
+  );
 }
 
-
-async function getGoogleAccessToken(env) {
-    if (
-        cachedGoogleToken &&
-        Date.now() < googleTokenExpiry - 60000
-    ) {
-        return cachedGoogleToken;
-    }
-
-    if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-        throw new Error(
-            "Compte de service Google non configuré."
-        );
-    }
-
-    const serviceAccount = JSON.parse(
-        env.GOOGLE_SERVICE_ACCOUNT_JSON
-    );
-
-    const now = Math.floor(Date.now() / 1000);
-
-    const jwtHeader = {
-        alg: "RS256",
-        typ: "JWT"
-    };
-
-    const jwtPayload = {
-        iss: serviceAccount.client_email,
-        scope: "https://www.googleapis.com/auth/spreadsheets",
-        aud: GOOGLE_TOKEN_URL,
-        iat: now,
-        exp: now + 3600
-    };
-
-    const unsignedToken = [
-        base64UrlEncode(JSON.stringify(jwtHeader)),
-        base64UrlEncode(JSON.stringify(jwtPayload))
-    ].join(".");
-
-    const privateKey = await crypto.subtle.importKey(
-        "pkcs8",
-        pemToArrayBuffer(serviceAccount.private_key),
-        {
-            name: "RSASSA-PKCS1-v1_5",
-            hash: "SHA-256"
-        },
-        false,
-        ["sign"]
-    );
-
-    const signature = await crypto.subtle.sign(
-        "RSASSA-PKCS1-v1_5",
-        privateKey,
-        new TextEncoder().encode(unsignedToken)
-    );
-
-    const jwt = `${unsignedToken}.${base64UrlEncode(
-        new Uint8Array(signature)
-    )}`;
-
-    const response = await fetch(GOOGLE_TOKEN_URL, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/x-www-form-urlencoded"
-        },
-        body: new URLSearchParams({
-            grant_type:
-                "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            assertion: jwt
-        })
-    });
-
-    if (!response.ok) {
-        throw new Error(
-            "Impossible d'obtenir le token Google."
-        );
-    }
-
-    const data = await response.json();
-
-    cachedGoogleToken = data.access_token;
-    googleTokenExpiry = Date.now() +
-        (data.expires_in * 1000);
-
-    return cachedGoogleToken;
+function getTabName(env, variable, fallback) {
+  return env[variable] || fallback;
 }
 
-
-/* ========================================
-   APPELS GOOGLE SHEETS
-======================================== */
-
-async function googleRequest(env, endpoint, options = {}) {
-    const token = await getGoogleAccessToken(env);
-
-    const response = await fetch(
-        `${GOOGLE_API}/${env.SPREADSHEET_ID}${endpoint}`,
-        {
-            ...options,
-            headers: {
-                Authorization: `Bearer ${token}`,
-                "Content-Type": "application/json",
-                ...options.headers
-            }
-        }
-    );
-
-    if (!response.ok) {
-        const details = await response.text();
-
-        console.error(
-            "Erreur Google Sheets :",
-            response.status,
-            details
-        );
-
-        throw new Error(
-            `Google Sheets a retourné ${response.status}.`
-        );
-    }
-
-    if (response.status === 204) {
-        return null;
-    }
-
-    return response.json();
+function escapeSheetName(name) {
+  return `'${name.replace(/'/g, "''")}'`;
 }
-
-
-/* ========================================
-   CONFIGURATION DU CLASSEUR
-======================================== */
-
-function validateConfiguration(env) {
-    if (!env.SPREADSHEET_ID) {
-        throw new Error("SPREADSHEET_ID manquant.");
-    }
-
-    if (!env.SHEET_TAB) {
-        throw new Error("SHEET_TAB manquant.");
-    }
-
-    if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) {
-        throw new Error("Compte Google manquant.");
-    }
-}
-
-
-function getSheetTitle(env) {
-    // Le nom de l'onglet est échappé pour A1 notation.
-    return `'${env.SHEET_TAB.replace(/'/g, "''")}'`;
-}
-
-
-async function getSheetMetadata(env) {
-    validateConfiguration(env);
-
-    const metadata = await googleRequest(
-        env,
-        "?fields=sheets.properties"
-    );
-
-    const sheet = metadata.sheets?.find(
-        item => item.properties.title === env.SHEET_TAB
-    );
-
-    if (!sheet) {
-        throw new Error(
-            `Onglet ${env.SHEET_TAB} introuvable.`
-        );
-    }
-
-    return sheet.properties;
-}
-
-
-/* ========================================
-   LECTURE DE LA BADGEUSE
-======================================== */
-
-async function readBadgeuse(env) {
-    validateConfiguration(env);
-
-    const range = `${getSheetTitle(env)}!${SHEET_RANGE}`;
-
-    const result = await googleRequest(
-        env,
-        `/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`
-    );
-
-    return result.values || [];
-}
-
-
-/* ========================================
-   NORMALISATION DES DATES
-======================================== */
 
 function normalizeDate(value) {
-    if (value === null || value === undefined || value === "") {
-        return null;
-    }
-
-    // Google Sheets stocke souvent les dates
-    // sous forme de numéro de série.
-    if (typeof value === "number") {
-        const milliseconds =
-            Date.UTC(1899, 11, 30) +
-            Math.round(value * 86400000);
-
-        return new Date(milliseconds)
-            .toISOString()
-            .slice(0, 10);
-    }
-
-    const text = String(value).trim();
-
-    // Format ISO.
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-        return text;
-    }
-
-    // Format français : JJ/MM/AAAA.
-    const frenchDate = text.match(
-        /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/
+  if (typeof value === "number") {
+    const date = new Date(
+      Date.UTC(1899, 11, 30) +
+      value * 86400000
     );
 
-    if (frenchDate) {
-        const [, day, month, year] = frenchDate;
+    return date.toISOString().slice(0, 10);
+  }
 
-        return [
-            year,
-            month.padStart(2, "0"),
-            day.padStart(2, "0")
-        ].join("-");
-    }
-
+  if (typeof value !== "string" || !value.trim()) {
     return null;
+  }
+
+  const input = value.trim();
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) {
+    return input;
+  }
+
+  const frenchDate = input.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/
+  );
+
+  if (frenchDate) {
+    const [, day, month, year] = frenchDate;
+
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  return null;
 }
 
+function formatDate(date) {
+  const [year, month, day] = date.split("-");
 
-/* ========================================
-   IDENTIFICATION DES COLONNES
-======================================== */
-
-function findDateColumn(rows, targetDate) {
-    // Ligne 6 = index 5.
-    const dateRow = rows[5] || [];
-
-    // C à J = index 2 à 9.
-    for (let column = 2; column <= 9; column++) {
-        const cellDate = normalizeDate(
-            dateRow[column]
-        );
-
-        if (cellDate === targetDate) {
-            return column;
-        }
-    }
-
-    return null;
+  return `${day}/${month}`;
 }
 
-
-/* ========================================
-   IDENTIFICATION DES SECTIONS
-======================================== */
-
-function getSectionMarker(value) {
-    if (value === null || value === undefined) {
-        return null;
-    }
-
-    const text = String(value).trim();
-
-    if (/^[A-Z]$/i.test(text)) {
-        return text.toUpperCase();
-    }
-
-    if (/^0\s*[àa]\s*9$/i.test(text)) {
-        return "0";
-    }
-
-    return null;
+function getWeekday(date) {
+  return new Intl.DateTimeFormat("fr-FR", {
+    weekday: "short",
+    timeZone: "UTC"
+  }).format(new Date(`${date}T12:00:00Z`));
 }
 
+function makeColumnLetter(index) {
+  let result = "";
 
-function getSectionForLogin(login) {
-    const firstCharacter = login
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .charAt(0)
-        .toUpperCase();
+  while (index > 0) {
+    const remainder = (index - 1) % 26;
 
-    if (/^\d$/.test(firstCharacter)) {
-        return "0";
-    }
+    result =
+      String.fromCharCode(65 + remainder) + result;
 
-    if (/^[A-Z]$/.test(firstCharacter)) {
-        return firstCharacter;
-    }
+    index = Math.floor((index - 1) / 26);
+  }
 
-    return null;
+  return result;
 }
 
+/* =====================================================
+   AUTHENTIFICATION GOOGLE
+===================================================== */
 
-/* ========================================
-   RECHERCHE D'UN UTILISATEUR
-======================================== */
+async function getGoogleAccessToken(env) {
+  if (
+    cachedToken &&
+    Date.now() < tokenExpiration
+  ) {
+    return cachedToken;
+  }
 
-function findUserRow(rows, login) {
-    const normalizedLogin = login.toLowerCase();
+  if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_MISSING");
+  }
 
-    for (let index = 0; index < rows.length; index++) {
-        const value = rows[index]?.[0];
+  let serviceAccount;
 
-        if (!value) continue;
-
-        // Ignorer les séparateurs alphabétiques.
-        if (getSectionMarker(value)) continue;
-
-        if (
-            String(value).trim().toLowerCase() ===
-            normalizedLogin
-        ) {
-            return index;
-        }
-    }
-
-    return null;
-}
-
-
-/* ========================================
-   RECHERCHE D'UNE PLACE ALPHABETIQUE
-======================================== */
-
-function findInsertionPosition(rows, login) {
-    const section = getSectionForLogin(login);
-
-    if (!section) {
-        return {
-            success: false,
-            code: "INVALID_LOGIN"
-        };
-    }
-
-    let sectionStart = null;
-    let sectionEnd = rows.length;
-
-    // Recherche du séparateur de section.
-    for (let index = 0; index < rows.length; index++) {
-        if (
-            getSectionMarker(rows[index]?.[0]) === section
-        ) {
-            sectionStart = index;
-            break;
-        }
-    }
-
-    if (sectionStart === null) {
-        return {
-            success: false,
-            code: "SECTION_NOT_FOUND"
-        };
-    }
-
-    // Délimitation par le prochain séparateur.
-    for (
-        let index = sectionStart + 1;
-        index < rows.length;
-        index++
-    ) {
-        if (getSectionMarker(rows[index]?.[0])) {
-            sectionEnd = index;
-            break;
-        }
-    }
-
-    const target = login.toLowerCase();
-
-    let insertionRow = null;
-    let lastOccupiedRow = sectionStart;
-
-    for (
-        let index = sectionStart + 1;
-        index < sectionEnd;
-        index++
-    ) {
-        const row = rows[index] || [];
-
-        const name = row[0];
-
-        const hasData = row.some(
-            value => value !== null &&
-                value !== undefined &&
-                value !== ""
-        );
-
-        if (hasData) {
-            lastOccupiedRow = index;
-        }
-
-        if (!name) continue;
-
-        if (getSectionMarker(name)) continue;
-
-        const existing = String(name).trim().toLowerCase();
-
-        if (
-            insertionRow === null &&
-            existing.localeCompare(
-                target,
-                "fr",
-                { sensitivity: "base" }
-            ) > 0
-        ) {
-            insertionRow = index;
-        }
-    }
-
-    if (insertionRow === null) {
-        insertionRow = lastOccupiedRow + 1;
-    }
-
-    // Vérifier qu'une ligne entière est disponible.
-    if (lastOccupiedRow + 1 >= sectionEnd) {
-        return {
-            success: false,
-            code: "NO_FREE_ROW"
-        };
-    }
-
-    const freeRow = rows[lastOccupiedRow + 1] || [];
-
-    const hasFreeRowData = freeRow.some(
-        value => value !== null &&
-            value !== undefined &&
-            value !== ""
+  try {
+    serviceAccount = JSON.parse(
+      env.GOOGLE_SERVICE_ACCOUNT_JSON
     );
+  } catch {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_INVALID_JSON");
+  }
 
-    if (hasFreeRowData) {
-        return {
-            success: false,
-            code: "NO_FREE_ROW"
-        };
-    }
+  if (
+    !serviceAccount.client_email ||
+    !serviceAccount.private_key
+  ) {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_INVALID");
+  }
 
-    return {
-        success: true,
-        insertionRow,
-        lastOccupiedRow
-    };
-}
+  const now = Math.floor(Date.now() / 1000);
 
+  const header = stringToBase64Url(
+    JSON.stringify({
+      alg: "RS256",
+      typ: "JWT"
+    })
+  );
 
-/* ========================================
-   VERIFICATION DE LA CASE DE POINTAGE
-======================================== */
+  const payload = stringToBase64Url(
+    JSON.stringify({
+      iss: serviceAccount.client_email,
+      scope: GOOGLE_SCOPE,
+      aud: GOOGLE_TOKEN_URL,
+      iat: now,
+      exp: now + 3600
+    })
+  );
 
-function getBadgeCell(rows, rowIndex, columnIndex) {
-    return rows[rowIndex]?.[columnIndex] ?? "";
-}
+  const unsignedToken = `${header}.${payload}`;
 
+  const privateKeyPem = serviceAccount.private_key
+    .replace(/-----BEGIN PRIVATE KEY-----/g, "")
+    .replace(/-----END PRIVATE KEY-----/g, "")
+    .replace(/\s/g, "");
 
-export async function getBadgeStatus(env, user, date) {
-    const rows = await readBadgeuse(env);
+  const privateKeyBytes = Uint8Array.from(
+    atob(privateKeyPem),
+    character => character.charCodeAt(0)
+  );
 
-    const column = findDateColumn(rows, date);
+  const privateKey = await crypto.subtle.importKey(
+    "pkcs8",
+    privateKeyBytes,
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      hash: "SHA-256"
+    },
+    false,
+    ["sign"]
+  );
 
-    if (column === null) {
-        throw new Error("DATE_NOT_FOUND");
-    }
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    privateKey,
+    new TextEncoder().encode(unsignedToken)
+  );
 
-    const row = findUserRow(rows, user.login);
+  const jwt =
+    `${unsignedToken}.${base64UrlEncode(new Uint8Array(signature))}`;
 
-    if (row === null) {
-        return {
-            alreadyBadged: false,
-            registered: false
-        };
-    }
+  const response = await fetch(GOOGLE_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt
+    })
+  });
 
-    const value = getBadgeCell(
-        rows,
-        row,
-        column
+  const data = await response.json();
+
+  if (!response.ok || !data.access_token) {
+    throw new Error(
+      `GOOGLE_AUTH_ERROR: ${data.error_description || data.error || response.status}`
     );
+  }
 
-    return {
-        alreadyBadged: value !== "",
-        registered: true
-    };
+  cachedToken = data.access_token;
+  tokenExpiration = Date.now() + (data.expires_in - 60) * 1000;
+
+  return cachedToken;
 }
 
+/* =====================================================
+   APPELS GOOGLE SHEETS API
+===================================================== */
 
-/* ========================================
-   ECRITURE DANS GOOGLE SHEETS
-======================================== */
+async function googleRequest(path, env, options = {}) {
+  const token = await getGoogleAccessToken(env);
 
-function isDateMissing(result) {
-    return result.code === "DATE_NOT_FOUND";
-}
+  const response = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${env.SPREADSHEET_ID}${path}`,
+    {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        ...options.headers
+      }
+    }
+  );
 
+  if (!response.ok) {
+    const error = await response.text();
 
-async function writeValues(env, updates) {
-    const data = updates.map(update => ({
-        range: update.range,
-        values: [[update.value]]
-    }));
-
-    return googleRequest(
-        env,
-        "/values:batchUpdate",
-        {
-            method: "POST",
-            body: JSON.stringify({
-                valueInputOption: "RAW",
-                data
-            })
-        }
+    throw new Error(
+      `GOOGLE_SHEETS_ERROR: ${response.status} ${error}`
     );
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json();
 }
 
+async function getSheetMetadata(env) {
+  const data = await googleRequest(
+    "?fields=sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))",
+    env
+  );
 
-/* ========================================
-   DEPLACEMENT DES LIGNES
-======================================== */
+  return data.sheets || [];
+}
 
-async function shiftRowsDown(
+async function getSheetId(tabName, env) {
+  const sheets = await getSheetMetadata(env);
+
+  const sheet = sheets.find(
+    item => item.properties.title === tabName
+  );
+
+  if (!sheet) {
+    throw new Error(`SHEET_NOT_FOUND: ${tabName}`);
+  }
+
+  return sheet.properties.sheetId;
+}
+
+async function readRange(range, env) {
+  const data = await googleRequest(
+    `/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE`,
+    env
+  );
+
+  return data.values || [];
+}
+
+/* =====================================================
+   CONFIGURATION DU PLANNING
+===================================================== */
+
+export async function getPlanning(env) {
+  if (!env.SPREADSHEET_ID) {
+    throw new Error("SPREADSHEET_ID_MISSING");
+  }
+
+  const configTab = getTabName(
     env,
-    sheetId,
-    firstRow,
-    lastRow
-) {
-    // Déplacement de bas en haut pour éviter
-    // d'écraser les données encore à déplacer.
-    const requests = [];
+    "CONFIG_TAB",
+    DEFAULT_CONFIG_TAB
+  );
 
-    for (
-        let row = lastRow;
-        row >= firstRow;
-        row--
-    ) {
-        requests.push({
-            copyPaste: {
-                source: {
-                    sheetId,
-                    startRowIndex: row,
-                    endRowIndex: row + 1,
-                    startColumnIndex: 0,
-                    endColumnIndex: TOTAL_COLUMNS
-                },
-                destination: {
-                    sheetId,
-                    startRowIndex: row + 1,
-                    endRowIndex: row + 2,
-                    startColumnIndex: 0,
-                    endColumnIndex: TOTAL_COLUMNS
-                },
-                pasteType: "PASTE_NORMAL"
-            }
-        });
+  const quotedTab = escapeSheetName(configTab);
+
+  const [generalConfig, planningRows] = await Promise.all([
+    readRange(`${quotedTab}!C2:C5`, env),
+    readRange(`${quotedTab}!A8:B21`, env)
+  ]);
+
+  const startDate = normalizeDate(
+    generalConfig[0]?.[0]
+  );
+
+  const endDate = normalizeDate(
+    generalConfig[1]?.[0]
+  );
+
+  const timezone = generalConfig[3]?.[0] || TIMEZONE;
+
+  if (timezone !== TIMEZONE) {
+    throw new Error("UNSUPPORTED_TIMEZONE");
+  }
+
+  if (!startDate || !endDate || startDate > endDate) {
+    throw new Error("INVALID_PLANNING_PERIOD");
+  }
+
+  const dates = [];
+
+  for (const row of planningRows) {
+    const date = normalizeDate(row[0]);
+
+    if (!date) continue;
+
+    if (date < startDate || date > endDate) {
+      continue;
     }
 
-    if (requests.length === 0) {
-        return;
-    }
+    const enabled =
+      row[1] === true ||
+      String(row[1]).toUpperCase() === "TRUE";
 
-    await googleRequest(
-        env,
-        ":batchUpdate",
-        {
-            method: "POST",
-            body: JSON.stringify({
-                requests
-            })
-        }
-    );
+    dates.push({
+      date,
+      enabled
+    });
+  }
+
+  if (dates.length === 0 || dates.length > 14) {
+    throw new Error("INVALID_PLANNING_DATES");
+  }
+
+  const uniqueDates = new Set(
+    dates.map(item => item.date)
+  );
+
+  if (uniqueDates.size !== dates.length) {
+    throw new Error("DUPLICATE_PLANNING_DATE");
+  }
+
+  dates.sort((a, b) =>
+    a.date.localeCompare(b.date)
+  );
+
+  return {
+    startDate,
+    endDate,
+    timezone,
+    dates
+  };
 }
 
+/* =====================================================
+   DONNÉES D1
+===================================================== */
 
-/* ========================================
-   ENREGISTREMENT DU BADGE
-======================================== */
+async function getGridData(env, planning) {
+  if (!env.DB) {
+    throw new Error("D1_DATABASE_MISSING");
+  }
+
+  const firstDate = planning.dates[0].date;
+  const lastDate = planning.dates[
+    planning.dates.length - 1
+  ].date;
+
+  const [usersResult, badgesResult] = await Promise.all([
+    env.DB.prepare(`
+      SELECT
+        twitch_user_id,
+        twitch_login,
+        display_name
+      FROM users
+      ORDER BY twitch_login COLLATE NOCASE ASC
+    `).all(),
+
+    env.DB.prepare(`
+      SELECT
+        twitch_user_id,
+        badge_date,
+        badge_time,
+        status
+      FROM badges
+      WHERE badge_date >= ?
+        AND badge_date <= ?
+        AND status IN ('pending', 'recorded')
+    `).bind(firstDate, lastDate).all()
+  ]);
+
+  const users = usersResult.results || [];
+  const badges = badgesResult.results || [];
+
+  const enabledDates = new Set(
+    planning.dates
+      .filter(item => item.enabled)
+      .map(item => item.date)
+  );
+
+  const collator = new Intl.Collator("fr", {
+    sensitivity: "base",
+    numeric: true
+  });
+
+  users.sort((a, b) =>
+    collator.compare(a.twitch_login, b.twitch_login) ||
+    a.twitch_user_id.localeCompare(b.twitch_user_id)
+  );
+
+  const badgeMap = new Map();
+
+  for (const badge of badges) {
+    if (!enabledDates.has(badge.badge_date)) {
+      continue;
+    }
+
+    const key =
+      `${badge.twitch_user_id}:${badge.badge_date}`;
+
+    badgeMap.set(key, badge.badge_time);
+  }
+
+  return {
+    users,
+    badgeMap
+  };
+}
+
+/* =====================================================
+   CONSTRUCTION DE LA GRILLE
+===================================================== */
+
+function buildGrid(planning, users, badgeMap) {
+  const headers = [
+    "Pseudo",
+    ...planning.dates.map(item => {
+      const weekday = getWeekday(item.date);
+      const date = formatDate(item.date);
+
+      return item.enabled
+        ? `${weekday} ${date}`
+        : `${weekday} ${date} (fermé)`;
+    })
+  ];
+
+  const rows = [headers];
+
+  for (const user of users) {
+    const row = [
+      user.twitch_login
+    ];
+
+    for (const item of planning.dates) {
+      if (!item.enabled) {
+        row.push("");
+        continue;
+      }
+
+      const key =
+        `${user.twitch_user_id}:${item.date}`;
+
+      row.push(badgeMap.get(key) || "");
+    }
+
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+/* =====================================================
+   SYNCHRONISATION DE LA GRILLE
+===================================================== */
+
+export async function syncBadgeuse(env) {
+  const badgeuseTab = getTabName(
+    env,
+    "SHEET_TAB",
+    DEFAULT_BADGEUSE_TAB
+  );
+
+  const planning = await getPlanning(env);
+
+  const sheetId = await getSheetId(
+    badgeuseTab,
+    env
+  );
+
+  const sheets = await getSheetMetadata(env);
+
+  const sheet = sheets.find(
+    item => item.properties.sheetId === sheetId
+  );
+
+  const currentRows =
+    sheet.properties.gridProperties.rowCount;
+
+  const currentColumns =
+    sheet.properties.gridProperties.columnCount;
+
+  const { users, badgeMap } = await getGridData(
+    env,
+    planning
+  );
+
+  const grid = buildGrid(
+    planning,
+    users,
+    badgeMap
+  );
+
+  const requiredRows = Math.max(
+    currentRows,
+    users.length + 2
+  );
+
+  const requiredColumns = Math.max(
+    currentColumns,
+    planning.dates.length + 1
+  );
+
+  const requests = [];
+
+  // Extension automatique de la grille si nécessaire.
+  if (
+    requiredRows !== currentRows ||
+    requiredColumns !== currentColumns
+  ) {
+    requests.push({
+      updateSheetProperties: {
+        properties: {
+          sheetId,
+          gridProperties: {
+            rowCount: requiredRows,
+            columnCount: requiredColumns
+          }
+        },
+        fields: "gridProperties.rowCount,gridProperties.columnCount"
+      }
+    });
+  }
+
+  // Effacement des anciennes valeurs de la grille,
+  // sans toucher aux formats ni au titre de la ligne 1.
+  requests.push({
+    updateCells: {
+      range: {
+        sheetId,
+        startRowIndex: 1,
+        endRowIndex: requiredRows,
+        startColumnIndex: 0,
+        endColumnIndex: requiredColumns
+      },
+      fields: "userEnteredValue"
+    }
+  });
+
+  // Réécriture des en-têtes et utilisateurs.
+  requests.push({
+    updateCells: {
+      start: {
+        sheetId,
+        rowIndex: 1,
+        columnIndex: 0
+      },
+      rows: grid.map(row => ({
+        values: row.map(value => ({
+          userEnteredValue: {
+            stringValue: String(value)
+          }
+        }))
+      })),
+      fields: "userEnteredValue"
+    }
+  });
+
+  await googleRequest(":batchUpdate", env, {
+    method: "POST",
+    body: JSON.stringify({
+      requests
+    })
+  });
+
+  return {
+    success: true,
+    usersCount: users.length,
+    datesCount: planning.dates.length,
+    sheetId
+  };
+}
+
+/* =====================================================
+   ENREGISTREMENT D'UN BADGE
+===================================================== */
 
 export async function recordBadge(
-    env,
-    user,
-    date,
-    time
+  userId,
+  date,
+  env
 ) {
-    try {
-        const rows = await readBadgeuse(env);
+  const planning = await getPlanning(env);
 
-        const column = findDateColumn(rows, date);
+  const plannedDay = planning.dates.find(
+    item => item.date === date
+  );
 
-        if (column === null) {
-            return {
-                success: false,
-                code: "DATE_NOT_FOUND"
-            };
-        }
+  if (!plannedDay || !plannedDay.enabled) {
+    throw new Error("BADGE_DAY_NOT_AVAILABLE");
+  }
 
-        let userRow = findUserRow(
-            rows,
-            user.login
-        );
+  const badge = await env.DB.prepare(`
+    SELECT
+      b.badge_time,
+      b.status,
+      u.twitch_login
+    FROM badges b
+    INNER JOIN users u
+      ON u.twitch_user_id = b.twitch_user_id
+    WHERE b.twitch_user_id = ?
+      AND b.badge_date = ?
+  `).bind(
+    String(userId),
+    date
+  ).first();
 
-        // Nouvel utilisateur : insertion alphabétique.
-        if (userRow === null) {
-            const position = findInsertionPosition(
-                rows,
-                user.login
-            );
+  if (!badge || !["pending", "recorded"].includes(badge.status)) {
+    throw new Error("BADGE_NOT_FOUND_IN_DATABASE");
+  }
 
-            if (!position.success) {
-                return position;
-            }
+  const syncResult = await syncBadgeuse(env);
 
-            const metadata = await getSheetMetadata(env);
+  const { users } = await getGridData(env, planning);
 
-            await shiftRowsDown(
-                env,
-                metadata.sheetId,
-                position.insertionRow,
-                position.lastOccupiedRow
-            );
+  const userIndex = users.findIndex(
+    user => user.twitch_user_id === String(userId)
+  );
 
-            userRow = position.insertionRow;
+  if (userIndex === -1) {
+    throw new Error("BADGE_USER_NOT_FOUND");
+  }
 
-            // Ecriture du nouveau pseudo.
-            const pseudoRange =
-                `${getSheetTitle(env)}!A${userRow + 1}`;
-
-            await writeValues(env, [
-                {
-                    range: pseudoRange,
-                    value: user.login
-                }
-            ]);
-        }
-
-        // Vérification de la case avant écriture.
-        const currentValue = getBadgeCell(
-            rows,
-            userRow,
-            column
-        );
-
-        if (currentValue !== "") {
-            return {
-                success: false,
-                code: "ALREADY_BADGED"
-            };
-        }
-
-        // C = index 2, donc colonne Google Sheets C.
-        const columnLetter = String.fromCharCode(
-            65 + column
-        );
-
-        const badgeRange =
-            `${getSheetTitle(env)}!${columnLetter}${userRow + 1}`;
-
-        await writeValues(env, [
-            {
-                range: badgeRange,
-                value: time
-            }
-        ]);
-
-        return {
-            success: true,
-            time,
-            date,
-            row: userRow + 1,
-            column: columnLetter
-        };
-
-    } catch (error) {
-        console.error(
-            "Erreur d'enregistrement Google Sheets :",
-            error
-        );
-
-        if (isDateMissing(error)) {
-            return {
-                success: false,
-                code: "DATE_NOT_FOUND"
-            };
-        }
-
-        throw error;
-    }
+  return {
+    success: true,
+    time: badge.badge_time,
+    sheetRow: userIndex + 3,
+    ...syncResult
+  };
 }
