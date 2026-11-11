@@ -1,0 +1,389 @@
+
+/* ========================================
+   BADGEUSE DU LABO
+   Application frontend
+======================================== */
+
+"use strict";
+
+/* ----------------------------------------
+   CONFIGURATION
+---------------------------------------- */
+
+const CONFIG = {
+    // À remplacer par l'URL du Cloudflare Worker
+    API_URL: "https://TON-WORKER.TON-COMPTE.workers.dev",
+
+    TIMEZONE: "Europe/Paris"
+};
+
+
+/* ----------------------------------------
+   ELEMENTS HTML
+---------------------------------------- */
+
+const elements = {
+    currentDate: document.getElementById("current-date"),
+    currentTime: document.getElementById("current-time"),
+
+    authSection: document.getElementById("auth-section"),
+    userSection: document.getElementById("user-section"),
+
+    loginButton: document.getElementById("login-button"),
+    logoutButton: document.getElementById("logout-button"),
+    badgeButton: document.getElementById("badge-button"),
+
+    userName: document.getElementById("user-name"),
+    userAvatar: document.getElementById("user-avatar"),
+
+    badgeStatus: document.getElementById("badge-status"),
+    statusText: document.getElementById("status-text"),
+
+    feedbackMessage: document.getElementById("feedback-message")
+};
+
+
+/* ----------------------------------------
+   ETAT DE L'APPLICATION
+---------------------------------------- */
+
+const state = {
+    user: null,
+    alreadyBadged: false,
+    isLoading: false,
+    isBadging: false
+};
+
+
+/* ----------------------------------------
+   OUTILS
+---------------------------------------- */
+
+function formatDate() {
+    return new Intl.DateTimeFormat("fr-FR", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+        timeZone: CONFIG.TIMEZONE
+    }).format(new Date());
+}
+
+
+function formatTime() {
+    return new Intl.DateTimeFormat("fr-FR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+        timeZone: CONFIG.TIMEZONE
+    }).format(new Date());
+}
+
+
+function updateClock() {
+    elements.currentDate.textContent = formatDate();
+    elements.currentTime.textContent = formatTime();
+}
+
+
+function showFeedback(message, type = "success") {
+    elements.feedbackMessage.textContent = message;
+    elements.feedbackMessage.className = `feedback-message ${type}`;
+    elements.feedbackMessage.hidden = false;
+}
+
+
+function hideFeedback() {
+    elements.feedbackMessage.hidden = true;
+    elements.feedbackMessage.textContent = "";
+}
+
+
+function setBadgeStatus(message, type = "") {
+    elements.badgeStatus.className = "badge-status";
+
+    if (type) {
+        elements.badgeStatus.classList.add(type);
+    }
+
+    elements.statusText.textContent = message;
+}
+
+
+/* ----------------------------------------
+   APPELS API
+---------------------------------------- */
+
+async function apiRequest(endpoint, options = {}) {
+    const response = await fetch(
+        `${CONFIG.API_URL}${endpoint}`,
+        {
+            ...options,
+            credentials: "include",
+            headers: {
+                "Content-Type": "application/json",
+                ...options.headers
+            }
+        }
+    );
+
+    let data;
+
+    try {
+        data = await response.json();
+    } catch {
+        throw new Error("Réponse invalide du serveur.");
+    }
+
+    if (!response.ok) {
+        const error = new Error(
+            data.message || "Une erreur est survenue."
+        );
+
+        error.status = response.status;
+        error.code = data.code;
+
+        throw error;
+    }
+
+    return data;
+}
+
+
+/* ----------------------------------------
+   AFFICHAGE UTILISATEUR
+---------------------------------------- */
+
+function displayUser(user) {
+    state.user = user;
+
+    elements.authSection.hidden = true;
+    elements.userSection.hidden = false;
+
+    elements.userName.textContent = user.login;
+
+    elements.userAvatar.textContent =
+        user.login.charAt(0).toUpperCase();
+
+    elements.badgeButton.disabled = true;
+
+    setBadgeStatus("Vérification du pointage...");
+}
+
+
+function displayLoggedOut() {
+    state.user = null;
+    state.alreadyBadged = false;
+
+    elements.authSection.hidden = false;
+    elements.userSection.hidden = true;
+
+    elements.badgeButton.disabled = true;
+
+    hideFeedback();
+}
+
+
+/* ----------------------------------------
+   AUTHENTIFICATION
+---------------------------------------- */
+
+function loginWithTwitch() {
+    hideFeedback();
+
+    if (!CONFIG.API_URL.startsWith("https://")) {
+        showFeedback(
+            "L'adresse du serveur n'est pas encore configurée.",
+            "error"
+        );
+        return;
+    }
+
+    window.location.href =
+        `${CONFIG.API_URL}/auth/start`;
+}
+
+
+async function logout() {
+    hideFeedback();
+
+    try {
+        await apiRequest("/auth/logout", {
+            method: "POST"
+        });
+    } catch (error) {
+        console.error("Erreur de déconnexion :", error);
+    } finally {
+        displayLoggedOut();
+    }
+}
+
+
+/* ----------------------------------------
+   RECUPERATION DE LA SESSION
+---------------------------------------- */
+
+async function checkSession() {
+    if (state.isLoading) return;
+
+    state.isLoading = true;
+
+    try {
+        const data = await apiRequest("/api/me");
+
+        if (!data.user) {
+            displayLoggedOut();
+            return;
+        }
+
+        displayUser(data.user);
+
+        state.alreadyBadged = Boolean(data.alreadyBadged);
+
+        if (state.alreadyBadged) {
+            setBadgeStatus(
+                "Tu as déjà badgé aujourd'hui. À demain !",
+                "success"
+            );
+
+            elements.badgeButton.disabled = true;
+            elements.badgeButton.textContent = "Déjà badgé ✓";
+        } else {
+            setBadgeStatus(
+                "Tu n'as pas encore badgé aujourd'hui."
+            );
+
+            elements.badgeButton.disabled = false;
+            elements.badgeButton.textContent =
+                "Je badge maintenant";
+        }
+
+    } catch (error) {
+        if (error.status === 401) {
+            displayLoggedOut();
+        } else {
+            console.error(
+                "Impossible de vérifier la session :",
+                error
+            );
+
+            displayLoggedOut();
+
+            showFeedback(
+                "Impossible de contacter le serveur. Réessaie dans quelques instants.",
+                "error"
+            );
+        }
+    } finally {
+        state.isLoading = false;
+    }
+}
+
+
+/* ----------------------------------------
+   ENREGISTREMENT DU BADGE
+---------------------------------------- */
+
+async function submitBadge() {
+    if (
+        !state.user ||
+        state.alreadyBadged ||
+        state.isBadging
+    ) {
+        return;
+    }
+
+    state.isBadging = true;
+    elements.badgeButton.disabled = true;
+    elements.badgeButton.textContent = "Enregistrement...";
+
+    hideFeedback();
+
+    try {
+        const result = await apiRequest("/api/badge", {
+            method: "POST"
+        });
+
+        state.alreadyBadged = true;
+
+        setBadgeStatus(
+            `Badge enregistré à ${result.time || "l'instant"} !`,
+            "success"
+        );
+
+        elements.badgeButton.textContent = "Déjà badgé ✓";
+
+        showFeedback(
+            "Présence enregistrée avec succès. Bonne matinale !",
+            "success"
+        );
+
+    } catch (error) {
+        console.error("Erreur de pointage :", error);
+
+        if (error.status === 409) {
+            state.alreadyBadged = true;
+
+            setBadgeStatus(
+                "Tu as déjà badgé aujourd'hui.",
+                "success"
+            );
+
+            elements.badgeButton.textContent = "Déjà badgé ✓";
+
+            showFeedback(
+                "Un pointage existe déjà pour aujourd'hui.",
+                "success"
+            );
+
+        } else {
+            elements.badgeButton.disabled = false;
+            elements.badgeButton.textContent =
+                "Je badge maintenant";
+
+            showFeedback(
+                error.message || "Impossible d'enregistrer le badge.",
+                "error"
+            );
+        }
+
+    } finally {
+        state.isBadging = false;
+    }
+}
+
+
+/* ----------------------------------------
+   INITIALISATION
+---------------------------------------- */
+
+function initializeApp() {
+
+    // Horloge
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    // Evénements
+    elements.loginButton.addEventListener(
+        "click",
+        loginWithTwitch
+    );
+
+    elements.logoutButton.addEventListener(
+        "click",
+        logout
+    );
+
+    elements.badgeButton.addEventListener(
+        "click",
+        submitBadge
+    );
+
+    // Vérification de la session
+    checkSession();
+}
+
+
+// Démarrage
+initializeApp();
