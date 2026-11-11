@@ -177,10 +177,11 @@ function displayUser(user) {
     elements.authSection.hidden = true;
     elements.userSection.hidden = false;
 
-    elements.userName.textContent = user.login;
+    const displayName = user.displayName || user.login || "Twitch";
+    elements.userName.textContent = displayName;
 
     elements.userAvatar.textContent =
-        user.login.charAt(0).toUpperCase();
+        displayName.charAt(0).toUpperCase();
 
     elements.badgeButton.disabled = true;
 
