@@ -164,14 +164,6 @@ export async function reserveBadge(
     };
   }
 
-  if (existing.status === "pending") {
-    return {
-      success: false,
-      status: "already_pending",
-      badge: existing
-    };
-  }
-
   // Reprise d'un badge échoué ou d'une réservation pending
   // abandonnée depuis plus de deux minutes (crash/interruption Worker).
   if (existing.status === "failed" || existing.status === "pending") {
