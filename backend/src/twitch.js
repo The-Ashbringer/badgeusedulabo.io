@@ -129,7 +129,7 @@ async function getAppAccessToken(env) {
   }
 
   appTokenCache = data.access_token;
-  appTokenExpiresAt = Date.now() + Math.max(60, data.expires_in - 60) * 1000;
+  appTokenExpiresAt = Date.now() + Math.max(0, data.expires_in - 60) * 1000;
   return appTokenCache;
 }
 
@@ -169,16 +169,26 @@ export async function lookupLegacyTwitchAccounts(names, env) {
     .map(name => name.trim())
     .filter(Boolean))];
 
+  // Get Users accepte jusqu'à 100 logins dans un seul appel.
+  // Les pseudos historiques qui ne peuvent pas être des logins Twitch
+  // (espaces, emoji, caractères spéciaux) sont exclus de cette recherche exacte.
+  const exactLogins = cleaned.filter(name => /^[a-z0-9_]{1,25}$/i.test(name));
+  const exactParams = new URLSearchParams();
+  for (const login of exactLogins) exactParams.append("login", login.toLowerCase());
+
+  const exactUsers = exactLogins.length
+    ? await helixGet(`users?${exactParams}`, env)
+    : { data: [] };
+
+  const exactByLogin = new Map(
+    (exactUsers.data || []).map(user => [user.login.toLowerCase(), user])
+  );
+
   const results = [];
   for (const legacyName of cleaned) {
-    const exact = await helixGet(
-      `users?${new URLSearchParams({ login: legacyName.toLowerCase() })}`,
-      env
-    );
-
-    const exactUser = exact.data?.[0];
+    const exactUser = exactByLogin.get(legacyName.toLowerCase()) || null;
     const channelSearch = await helixGet(
-      `search/channels?${new URLSearchParams({ query: legacyName, first: "100" })}`,
+      `search/channels?${new URLSearchParams({ query: legacyName, first: "100", live_only: "false" })}`,
       env
     );
 
