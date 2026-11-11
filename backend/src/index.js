@@ -164,7 +164,11 @@ export default {
         try { body = await request.json(); }
         catch { return errorResponse("INVALID_REQUEST", 400, corsHeaders); }
 
-        const results = await lookupLegacyTwitchAccounts(body?.names, env);
+        if (!Array.isArray(body?.names) || body.names.length > 24) {
+          return errorResponse("INVALID_LOOKUP_NAMES", 400, corsHeaders);
+        }
+
+        const results = await lookupLegacyTwitchAccounts(body.names, env);
         return jsonResponse({ results }, 200, corsHeaders);
       }
 
