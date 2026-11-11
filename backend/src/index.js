@@ -258,7 +258,11 @@ export default {
         code,
         status,
         corsHeaders,
-        status === 500 ? "Une erreur interne est survenue." : code
+        status === 500
+          ? "Une erreur interne est survenue."
+          : status === 503
+            ? "La badgeuse est momentanément occupée. Réessaie dans quelques secondes."
+            : code
       );
     }
   }
