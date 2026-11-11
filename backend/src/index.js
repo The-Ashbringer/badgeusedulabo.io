@@ -164,7 +164,12 @@ export default {
         try { body = await request.json(); }
         catch { return errorResponse("INVALID_REQUEST", 400, corsHeaders); }
 
-        if (!Array.isArray(body?.names) || body.names.length > 24) {
+        if (!Array.isArray(body?.names) || body.names.length > 24 ||
+            body.names.some(name =>
+              typeof name !== "string" ||
+              name.trim().length === 0 ||
+              name.length > 100
+            )) {
           return errorResponse("INVALID_LOOKUP_NAMES", 400, corsHeaders);
         }
 
