@@ -1,4 +1,3 @@
-
 import {
   handleAuthStart,
   handleAuthCallback,
@@ -22,23 +21,22 @@ import {
 
 function getCorsHeaders(request, env) {
   const requestOrigin = request.headers.get("Origin");
-
   let allowedOrigin = "";
 
   try {
     allowedOrigin = new URL(env.FRONTEND_URL).origin;
   } catch {
-    allowedOrigin = env.FRONTEND_URL;
+    allowedOrigin = env.FRONTEND_URL || "";
   }
 
   const headers = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Credentials": "true",
     "Vary": "Origin"
   };
 
-  if (requestOrigin === allowedOrigin) {
+  if (requestOrigin && requestOrigin === allowedOrigin) {
     headers["Access-Control-Allow-Origin"] = allowedOrigin;
   }
 
@@ -51,6 +49,7 @@ function jsonResponse(data, status = 200, corsHeaders = {}) {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
       ...corsHeaders
     }
   });
@@ -78,13 +77,17 @@ function getParisTime() {
 }
 
 
-function getErrorStatus(error) {
-  const message = error?.message || "";
+function errorResponse(code, status, corsHeaders, message = code) {
+  return jsonResponse({ code, message }, status, corsHeaders);
+}
 
-  if (message === "UNAUTHORIZED") return 401;
-  if (message === "BADGE_DAY_NOT_AVAILABLE") return 403;
-  if (message === "ALREADY_BADGED") return 409;
-  if (message === "BADGE_PENDING") return 409;
+
+function getErrorStatus(error) {
+  const code = error?.message || "";
+
+  if (code === "UNAUTHORIZED") return 401;
+  if (code === "BADGE_DAY_NOT_AVAILABLE") return 403;
+  if (code === "ALREADY_BADGED" || code === "BADGE_PENDING") return 409;
 
   return 500;
 }
@@ -110,7 +113,6 @@ export default {
         }, 200, corsHeaders);
       }
 
-      // Authentification Twitch
       if (url.pathname === "/auth/start" && request.method === "GET") {
         return handleAuthStart(request, env);
       }
@@ -120,17 +122,22 @@ export default {
       }
 
       if (url.pathname === "/auth/logout" && request.method === "POST") {
-        return handleLogout(request, env);
+        const response = await handleLogout(request, env);
+        const headers = new Headers(response.headers);
+        for (const [key, value] of Object.entries(corsHeaders)) {
+          headers.set(key, value);
+        }
+        return new Response(response.body, {
+          status: response.status,
+          headers
+        });
       }
 
-      // Vérification de la session et de l'état de badgeage
       if (url.pathname === "/api/me" && request.method === "GET") {
         const session = await getSession(request, env);
 
         if (!session) {
-          return jsonResponse({
-            error: "UNAUTHORIZED"
-          }, 401, corsHeaders);
+          return errorResponse("UNAUTHORIZED", 401, corsHeaders);
         }
 
         await upsertUser({
@@ -142,16 +149,9 @@ export default {
 
         const date = getParisDate();
         const planning = await getPlanning(env);
+        const today = planning.dates.find(item => item.date === date);
 
-        const today = planning.dates.find(
-          item => item.date === date
-        );
-
-        const badgeStatus = await getBadgeStatus(
-          session.id,
-          date,
-          env
-        );
+        const badgeStatus = await getBadgeStatus(session.id, date, env);
 
         return jsonResponse({
           user: {
@@ -169,29 +169,21 @@ export default {
         }, 200, corsHeaders);
       }
 
-      // Enregistrement du badge quotidien
       if (url.pathname === "/api/badge" && request.method === "POST") {
         const session = await getSession(request, env);
 
         if (!session) {
-          return jsonResponse({
-            error: "UNAUTHORIZED"
-          }, 401, corsHeaders);
+          return errorResponse("UNAUTHORIZED", 401, corsHeaders);
         }
 
         const date = getParisDate();
         const time = getParisTime();
 
         const planning = await getPlanning(env);
-
-        const today = planning.dates.find(
-          item => item.date === date
-        );
+        const today = planning.dates.find(item => item.date === date);
 
         if (!today?.enabled) {
-          return jsonResponse({
-            error: "BADGE_DAY_NOT_AVAILABLE"
-          }, 403, corsHeaders);
+          return errorResponse("BADGE_DAY_NOT_AVAILABLE", 403, corsHeaders);
         }
 
         await upsertUser({
@@ -201,78 +193,60 @@ export default {
           profileImageUrl: session.profileImageUrl
         }, env);
 
-        const reservation = await reserveBadge(
-          session.id,
-          date,
-          time,
-          env
-        );
+        const reservation = await reserveBadge(session.id, date, time, env);
 
-        if (!reservation.reserved) {
-          if (reservation.reason === "already_recorded") {
-            return jsonResponse({
-              error: "ALREADY_BADGED"
-            }, 409, corsHeaders);
+        if (!reservation.success) {
+          if (reservation.status === "already_recorded") {
+            return errorResponse("ALREADY_BADGED", 409, corsHeaders);
           }
 
-          return jsonResponse({
-            error: "BADGE_PENDING"
-          }, 409, corsHeaders);
+          return errorResponse("BADGE_PENDING", 409, corsHeaders);
         }
 
         try {
-          const result = await recordBadge(
-            session.id,
-            date,
-            env
-          );
-
-          await markBadgeRecorded(
+          const result = await recordBadge(session.id, date, env);
+          const recorded = await markBadgeRecorded(
             session.id,
             date,
             result.sheetRow,
             env
           );
 
+          if (!recorded) {
+            throw new Error("BADGE_CONFIRMATION_FAILED");
+          }
+
           return jsonResponse({
             success: true,
             date,
-            time,
+            time: result.time || time,
             sheetRow: result.sheetRow
           }, 200, corsHeaders);
 
         } catch (error) {
           try {
-            await markBadgeFailed(
-              session.id,
-              date,
-              env
-            );
+            await markBadgeFailed(session.id, date, error, env);
           } catch (databaseError) {
-            console.error(
-              "Impossible de mettre à jour le statut du badge :",
-              databaseError
-            );
+            console.error("Impossible de mettre à jour le statut du badge :", databaseError);
           }
 
           throw error;
         }
       }
 
-      return jsonResponse({
-        error: "NOT_FOUND"
-      }, 404, corsHeaders);
+      return errorResponse("NOT_FOUND", 404, corsHeaders);
 
     } catch (error) {
       console.error("Worker error:", error);
-
       const status = getErrorStatus(error);
+      const code = status === 500 ? "INTERNAL_SERVER_ERROR" : error.message;
 
-      return jsonResponse({
-        error: status === 500
-          ? "INTERNAL_SERVER_ERROR"
-          : error.message
-      }, status, corsHeaders);
+      return errorResponse(
+        code,
+        status,
+        corsHeaders,
+        status === 500 ? "Une erreur interne est survenue." : code
+      );
     }
   }
 };
