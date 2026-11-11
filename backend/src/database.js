@@ -120,9 +120,10 @@ export async function reserveBadge(
       twitch_user_id,
       badge_date,
       badge_time,
-      status
+      status,
+      attempt_count
     )
-    VALUES (?, ?, ?, 'pending')
+    VALUES (?, ?, ?, 'pending', 1)
     ON CONFLICT(twitch_user_id, badge_date)
     DO NOTHING
   `).bind(id, date, time).run();
@@ -165,6 +166,8 @@ export async function reserveBadge(
       SET
         badge_time = ?,
         status = 'pending',
+        attempt_count = attempt_count + 1,
+        last_error = NULL,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE twitch_user_id = ?
         AND badge_date = ?
@@ -206,6 +209,7 @@ export async function markBadgeRecorded(
     SET
       status = 'recorded',
       sheet_row = ?,
+      last_error = NULL,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE twitch_user_id = ?
       AND badge_date = ?
@@ -226,6 +230,7 @@ export async function markBadgeRecorded(
 export async function markBadgeFailed(
   userId,
   date,
+  error,
   env
 ) {
   const db = getDatabase(env);
@@ -234,11 +239,13 @@ export async function markBadgeFailed(
     UPDATE badges
     SET
       status = 'failed',
+      last_error = ?,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE twitch_user_id = ?
       AND badge_date = ?
       AND status = 'pending'
   `).bind(
+    String(error?.message || error || "UNKNOWN_ERROR").slice(0, 500),
     String(userId),
     date
   ).run();
