@@ -19,6 +19,10 @@ import {
   recordBadge
 } from "./google-sheets.js";
 
+import {
+  lookupLegacyTwitchAccounts
+} from "./twitch.js";
+
 
 function getCorsHeaders(request, env) {
   const requestOrigin = request.headers.get("Origin");
