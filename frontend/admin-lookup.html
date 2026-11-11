@@ -177,22 +177,24 @@ function render(){
 function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 runBtn.addEventListener("click",async()=>{
  const token=sessionStorage.getItem(SESSION_KEY);
- if(!token){statusEl.textContent="Session absente. Connecte-toi d'abord à la badgeuse dans ce même onglet.";return;}
+ if(!token){statusEl.textContent="Session absente. Connecte-toi d\'abord à la badgeuse dans ce même onglet.";return;}
  const names=[...new Set(namesEl.value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean))];
- allResults=[];resultsEl.innerHTML="";downloadBtn.disabled=true;
+ allResults=[];resultsEl.innerHTML="";downloadBtn.disabled=true;runBtn.disabled=true;
  try{
   for(let i=0;i<names.length;i+=24){
-   statusEl.textContent='Recherche '+Math.min(i+24,names.length)+' / '+names.length+'…';
-   const response=await fetch(API+'/api/admin/twitch-lookup',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},body:JSON.stringify({names:names.slice(i,i+24)})});
+   statusEl.textContent="Recherche "+Math.min(i+24,names.length)+" / "+names.length+"…";
+   const response=await fetch(API+"/api/admin/twitch-lookup",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},body:JSON.stringify({names:names.slice(i,i+24)})});
    const data=await response.json();
-   if(!response.ok)throw new Error(data.message||data.code||('HTTP '+response.status));
-   allResults.push(...data.results);\n   render();
+   if(!response.ok)throw new Error(data.message||data.code||("HTTP "+response.status));
+   allResults.push(...data.results);
+   render();
   }
   downloadBtn.disabled=false;
   const exact=allResults.filter(x=>x.exactLoginMatch).length;
   const candidate=allResults.filter(x=>!x.exactLoginMatch&&x.channelCandidates.length).length;
-  statusEl.textContent='Terminé : '+allResults.length+' pseudos, '+exact+' correspondances exactes par login, '+candidate+' pistes de chaîne, '+(allResults.length-exact-candidate)+' sans résultat.';
- }catch(e){statusEl.textContent='Erreur : '+e.message+(allResults.length?' Résultats partiels conservés : '+allResults.length+'.':'');}\n finally{runBtn.disabled=false;}
+  statusEl.textContent="Terminé : "+allResults.length+" pseudos, "+exact+" correspondances exactes par login, "+candidate+" pistes de chaîne, "+(allResults.length-exact-candidate)+" sans résultat.";
+ }catch(e){statusEl.textContent="Erreur : "+e.message+(allResults.length?" Résultats partiels conservés : "+allResults.length+".":"");}
+ finally{runBtn.disabled=false;}
 });
 downloadBtn.addEventListener("click",()=>{
  const rows=[["pseudo_source","statut","twitch_login","display_name","twitch_user_id"]];
