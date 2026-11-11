@@ -1,0 +1,491 @@
+
+/* ========================================
+   BADGEUSE DU LABO
+   Styles principaux
+======================================== */
+
+:root {
+    --background: #0e0e10;
+    --surface: #18181b;
+    --surface-light: #242429;
+    --surface-hover: #2b2b31;
+
+    --primary: #9147ff;
+    --primary-hover: #772ce8;
+    --primary-light: #bf94ff;
+
+    --text: #efeff1;
+    --text-muted: #adadb8;
+
+    --success: #00c781;
+    --success-bg: rgba(0, 199, 129, 0.12);
+
+    --danger: #eb5252;
+    --danger-bg: rgba(235, 82, 82, 0.12);
+
+    --border: rgba(255, 255, 255, 0.08);
+
+    --radius: 16px;
+    --transition: 180ms ease;
+}
+
+/* RESET */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html {
+    min-height: 100%;
+    color-scheme: dark;
+}
+
+body {
+    min-height: 100vh;
+    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", sans-serif;
+    color: var(--text);
+    background:
+        radial-gradient(
+            ellipse at 50% 0%,
+            rgba(145, 71, 255, 0.16),
+            transparent 45%
+        ),
+        var(--background);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 32px 20px;
+}
+
+/* LAYOUT */
+
+.app-container {
+    width: 100%;
+    max-width: 520px;
+}
+
+/* HEADER */
+
+.app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 32px;
+    gap: 16px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.brand-icon {
+    width: 46px;
+    height: 46px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(
+        135deg,
+        var(--primary),
+        #5c16bd
+    );
+    border-radius: 13px;
+    font-weight: 900;
+    font-size: 24px;
+    box-shadow: 0 5px 22px rgba(145, 71, 255, 0.3);
+}
+
+.brand h1 {
+    font-size: 18px;
+    font-weight: 750;
+    letter-spacing: -0.4px;
+}
+
+.brand p {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 3px;
+}
+
+.live-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+.live-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--success);
+    border-radius: 50%;
+    box-shadow: 0 0 12px rgba(0, 199, 129, 0.5);
+}
+
+/* MAIN CARD */
+
+.badge-card {
+    background: linear-gradient(
+        145deg,
+        rgba(35, 35, 42, 0.98),
+        rgba(24, 24, 27, 0.98)
+    );
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    padding: 34px;
+    box-shadow:
+        0 25px 70px rgba(0, 0, 0, 0.4),
+        0 0 50px rgba(145, 71, 255, 0.05);
+}
+
+/* CARD HEADING */
+
+.card-heading {
+    text-align: center;
+    margin-bottom: 28px;
+}
+
+.eyebrow {
+    display: inline-block;
+    color: var(--primary-light);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 1.8px;
+    margin-bottom: 13px;
+}
+
+.card-heading h2 {
+    font-size: 26px;
+    letter-spacing: -0.8px;
+    margin-bottom: 8px;
+}
+
+.card-heading p {
+    font-size: 14px;
+    color: var(--text-muted);
+}
+
+/* DATE */
+
+.date-display {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 13px;
+    padding: 17px;
+    margin-bottom: 28px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 13px;
+}
+
+.date-icon {
+    font-size: 23px;
+}
+
+.date-display div {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+#current-date {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-transform: capitalize;
+}
+
+#current-time {
+    font-size: 22px;
+    font-weight: 750;
+    letter-spacing: 1px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* AUTHENTICATION */
+
+.auth-section {
+    text-align: center;
+}
+
+.auth-section p {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: 19px;
+}
+
+/* BUTTONS */
+
+.button {
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 750;
+    transition:
+        background var(--transition),
+        transform var(--transition),
+        box-shadow var(--transition),
+        opacity var(--transition);
+}
+
+.button-twitch {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 54px;
+    border-radius: 11px;
+    background: var(--primary);
+    color: white;
+    font-size: 14px;
+}
+
+.button-twitch:hover {
+    background: var(--primary-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(145, 71, 255, 0.25);
+}
+
+.twitch-icon {
+    display: grid;
+    place-items: center;
+    width: 25px;
+    height: 25px;
+    border: 2px solid white;
+    border-radius: 5px;
+    font-weight: 900;
+}
+
+.button-badge {
+    width: 100%;
+    min-height: 58px;
+    border-radius: 11px;
+    background: linear-gradient(
+        135deg,
+        var(--primary),
+        #772ce8
+    );
+    color: white;
+    font-size: 15px;
+    margin-top: 21px;
+}
+
+.button-badge:not(:disabled):hover {
+    transform: translateY(-2px);
+    box-shadow: 0 9px 25px rgba(145, 71, 255, 0.3);
+}
+
+.button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+    filter: grayscale(0.35);
+}
+
+/* USER */
+
+.user-section {
+    width: 100%;
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+}
+
+.avatar-placeholder {
+    display: grid;
+    place-items: center;
+    width: 43px;
+    height: 43px;
+    flex-shrink: 0;
+    background: rgba(145, 71, 255, 0.2);
+    border: 1px solid rgba(145, 71, 255, 0.4);
+    border-radius: 50%;
+    color: var(--primary-light);
+    font-size: 19px;
+    font-weight: 800;
+}
+
+.user-details {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.user-label {
+    font-size: 9px;
+    color: var(--text-muted);
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+#user-name {
+    font-size: 14px;
+    overflow-wrap: anywhere;
+}
+
+.button-logout {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--text-muted);
+    padding: 7px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.button-logout:hover {
+    color: white;
+    background: var(--surface-hover);
+}
+
+/* STATUS */
+
+.badge-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px;
+    margin-top: 20px;
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.status-indicator {
+    width: 9px;
+    height: 9px;
+    flex-shrink: 0;
+    background: #888;
+    border-radius: 50%;
+}
+
+.badge-status.success {
+    background: var(--success-bg);
+    color: var(--success);
+}
+
+.badge-status.success .status-indicator {
+    background: var(--success);
+}
+
+.badge-status.pending {
+    background: var(--danger-bg);
+    color: var(--danger);
+}
+
+.badge-status.pending .status-indicator {
+    background: var(--danger);
+}
+
+/* NOTICE */
+
+.badge-notice {
+    color: var(--text-muted);
+    font-size: 11px;
+    text-align: center;
+    margin-top: 14px;
+    line-height: 1.5;
+}
+
+/* FEEDBACK */
+
+.feedback-message {
+    padding: 13px;
+    margin-top: 19px;
+    border-radius: 9px;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.feedback-message.success {
+    background: var(--success-bg);
+    color: var(--success);
+}
+
+.feedback-message.error {
+    background: var(--danger-bg);
+    color: var(--danger);
+}
+
+/* FOOTER */
+
+.app-footer {
+    margin-top: 25px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 1.8;
+}
+
+/* ACCESSIBILITY */
+
+button:focus-visible {
+    outline: 2px solid var(--primary-light);
+    outline-offset: 3px;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+/* MOBILE */
+
+@media (max-width: 480px) {
+    body {
+        padding: 22px 14px;
+        align-items: flex-start;
+    }
+
+    .app-header {
+        margin-bottom: 24px;
+    }
+
+    .brand h1 {
+        font-size: 16px;
+    }
+
+    .brand-icon {
+        width: 40px;
+        height: 40px;
+        font-size: 21px;
+    }
+
+    .badge-card {
+        padding: 25px 19px;
+        border-radius: 17px;
+    }
+
+    .card-heading h2 {
+        font-size: 23px;
+    }
+
+    .user-info {
+        flex-wrap: wrap;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+    }
+}
