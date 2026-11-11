@@ -12,7 +12,7 @@
 
 const CONFIG = {
     // À remplacer par l'URL du Cloudflare Worker
-    API_URL: "https://TON-WORKER.TON-COMPTE.workers.dev",
+    API_URL: "https://badgeuse-twitch.docarenou.workers.dev",
 
     TIMEZONE: "Europe/Paris",
     SESSION_KEY: "badgeuse_session"
