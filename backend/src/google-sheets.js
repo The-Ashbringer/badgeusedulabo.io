@@ -425,7 +425,7 @@ async function getGridData(env, planning) {
         twitch_login,
         display_name
       FROM users
-      ORDER BY twitch_login COLLATE NOCASE ASC
+      ORDER BY display_name COLLATE NOCASE ASC
     `).all(),
 
     env.DB.prepare(`
@@ -456,6 +456,7 @@ async function getGridData(env, planning) {
   });
 
   users.sort((a, b) =>
+    collator.compare(a.display_name || a.twitch_login, b.display_name || b.twitch_login) ||
     collator.compare(a.twitch_login, b.twitch_login) ||
     a.twitch_user_id.localeCompare(b.twitch_user_id)
   );
@@ -500,7 +501,7 @@ function buildGrid(planning, users, badgeMap) {
 
   for (const user of users) {
     const row = [
-      user.twitch_login
+      user.display_name || user.twitch_login
     ];
 
     for (const item of planning.dates) {
