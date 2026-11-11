@@ -160,7 +160,12 @@ function normalizeTwitchName(value) {
  * ses résultats sont donc des pistes, jamais des associations automatiques.
  */
 export async function lookupLegacyTwitchAccounts(names, env) {
-  if (!Array.isArray(names) || names.length > 50) {
+  if (!Array.isArray(names) || names.length > 50 ||
+      names.some(name =>
+        typeof name !== "string" ||
+        name.trim().length === 0 ||
+        name.length > 100
+      )) {
     throw new Error("INVALID_LOOKUP_NAMES");
   }
 
