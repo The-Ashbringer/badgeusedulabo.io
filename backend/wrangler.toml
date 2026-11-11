@@ -7,7 +7,7 @@ compatibility_date = "2026-11-11"
 FRONTEND_URL = "https://TON-PSEUDO.github.io/TON-REPO"
 TWITCH_REDIRECT_URI = "https://badgeuse-twitch.docarenou.workers.dev/auth/callback"
 TWITCH_CLIENT_ID = "zcontbfpk9eyipgryg8tymcckb0dou"
-SPREADSHEET_ID = "A_REMPLACER_PAR_ID_DU_GOOGLE_SHEETS"
+SPREADSHEET_ID = "1w3e0HH-H8NYswmVdyYriHEXaUUcUruzaspYUGxLYY44"
 SHEET_TAB = "BADGEUSE"
 CONFIG_TAB = "CONFIG"
 
