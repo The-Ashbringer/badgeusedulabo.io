@@ -146,6 +146,24 @@ export default {
         });
       }
 
+      if (url.pathname === "/api/admin/twitch-lookup" && request.method === "POST") {
+        const session = await getSession(request, env);
+        if (!session) return errorResponse("UNAUTHORIZED", 401, corsHeaders);
+
+        // L'accès doit être explicitement limité au compte administrateur.
+        if (!env.TWITCH_ADMIN_LOGIN ||
+            session.login.toLowerCase() !== env.TWITCH_ADMIN_LOGIN.toLowerCase()) {
+          return errorResponse("FORBIDDEN", 403, corsHeaders);
+        }
+
+        let body;
+        try { body = await request.json(); }
+        catch { return errorResponse("INVALID_REQUEST", 400, corsHeaders); }
+
+        const results = await lookupLegacyTwitchAccounts(body?.names, env);
+        return jsonResponse({ results }, 200, corsHeaders);
+      }
+
       if (url.pathname === "/api/me" && request.method === "GET") {
         const session = await getSession(request, env);
 
