@@ -14,7 +14,8 @@ const CONFIG = {
     // À remplacer par l'URL du Cloudflare Worker
     API_URL: "https://TON-WORKER.TON-COMPTE.workers.dev",
 
-    TIMEZONE: "Europe/Paris"
+    TIMEZONE: "Europe/Paris",
+    SESSION_KEY: "badgeuse_session"
 };
 
 
@@ -117,16 +118,29 @@ function setBadgeStatus(message, type = "") {
    APPELS API
 ---------------------------------------- */
 
+function getSessionToken() {
+    return sessionStorage.getItem(CONFIG.SESSION_KEY);
+}
+
+
 async function apiRequest(endpoint, options = {}) {
+    const headers = {
+        "Content-Type": "application/json",
+        ...options.headers
+    };
+
+    const token = getSessionToken();
+
+    if (token && endpoint !== "/auth/exchange") {
+        headers.Authorization = `Bearer ${token}`;
+    }
+
     const response = await fetch(
         `${CONFIG.API_URL}${endpoint}`,
         {
             ...options,
-            credentials: "include",
-            headers: {
-                "Content-Type": "application/json",
-                ...options.headers
-            }
+            credentials: "omit",
+            headers
         }
     );
 
@@ -140,11 +154,11 @@ async function apiRequest(endpoint, options = {}) {
 
     if (!response.ok) {
         const error = new Error(
-            data.message || "Une erreur est survenue."
+            data.message || data.code || "Une erreur est survenue."
         );
 
         error.status = response.status;
-        error.code = data.code;
+        error.code = data.code || data.error;
 
         throw error;
     }
@@ -217,7 +231,49 @@ async function logout() {
     } catch (error) {
         console.error("Erreur de déconnexion :", error);
     } finally {
+        sessionStorage.removeItem(CONFIG.SESSION_KEY);
         displayLoggedOut();
+    }
+}
+
+
+async function completeTwitchLogin() {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const loginCode = params.get("auth_code");
+
+    if (!loginCode) {
+        return false;
+    }
+
+    // Retire immédiatement le code temporaire de l'URL.
+    window.history.replaceState(
+        null,
+        document.title,
+        window.location.pathname + window.location.search
+    );
+
+    try {
+        const result = await apiRequest("/auth/exchange", {
+            method: "POST",
+            body: JSON.stringify({ code: loginCode })
+        });
+
+        if (!result.token || !result.user) {
+            throw new Error("Réponse de connexion incomplète.");
+        }
+
+        sessionStorage.setItem(CONFIG.SESSION_KEY, result.token);
+        showFeedback("Connexion Twitch réussie.", "success");
+        return true;
+
+    } catch (error) {
+        console.error("Échec de l'échange OAuth :", error);
+        sessionStorage.removeItem(CONFIG.SESSION_KEY);
+        showFeedback(
+            error.message || "La connexion Twitch a échoué. Réessaie.",
+            "error"
+        );
+        return false;
     }
 }
 
@@ -228,6 +284,11 @@ async function logout() {
 
 async function checkSession() {
     if (state.isLoading) return;
+
+    if (!getSessionToken()) {
+        displayLoggedOut();
+        return;
+    }
 
     state.isLoading = true;
 
@@ -280,6 +341,7 @@ async function checkSession() {
 
     } catch (error) {
         if (error.status === 401) {
+            sessionStorage.removeItem(CONFIG.SESSION_KEY);
             displayLoggedOut();
         } else {
             console.error(
@@ -402,7 +464,7 @@ async function submitBadge() {
    INITIALISATION
 ---------------------------------------- */
 
-function initializeApp() {
+async function initializeApp() {
 
     // Horloge
     updateClock();
@@ -423,6 +485,21 @@ function initializeApp() {
         "click",
         submitBadge
     );
+
+    // Échange du code OAuth reçu dans le fragment URL.
+    const params = new URLSearchParams(window.location.search);
+    const authError = params.get("auth");
+
+    if (authError && authError !== "success") {
+        showFeedback(
+            authError === "cancelled"
+                ? "Connexion Twitch annulée."
+                : "La connexion Twitch a échoué. Réessaie.",
+            "error"
+        );
+    }
+
+    await completeTwitchLogin();
 
     // Vérification de la session
     checkSession();
