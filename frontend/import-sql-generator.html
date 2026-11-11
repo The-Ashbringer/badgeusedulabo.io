@@ -54,6 +54,8 @@ function build(){
   });
   const seen=new Set();for(const x of data){const k=x.id+'|'+x.date;if(seen.has(k))throw Error('Doublon : identifiant '+x.id+' le '+x.date+'. Une seule badgeuse par personne et par jour.');seen.add(k)}
   if(!data.length)throw Error('Aucune ligne à importer.');
+  const requiredReplacements=[{id:'103271510',date:'2026-11-11',time:'08:08:00'},{id:'116593479',date:'2026-11-11',time:'08:40:00'}];
+  for(const expected of requiredReplacements){if(!data.some(x=>x.id===expected.id&&x.date===expected.date&&x.time===expected.time))throw Error('Pointage historique de remplacement absent ou incorrect pour l’identifiant '+expected.id+' le 11/11. Les deux pointages historiques doivent être présents pour remplacer les tests.');}
   const deletes=[
    "DELETE FROM badges WHERE id = 1 AND twitch_user_id = '103271510' AND badge_date = '2026-11-11' AND badge_time = '19:48:03' AND status = 'recorded';",
    "DELETE FROM badges WHERE id = 2 AND twitch_user_id = '116593479' AND badge_date = '2026-11-11' AND badge_time = '20:28:41' AND status = 'recorded';"
@@ -61,11 +63,10 @@ function build(){
   const inserts=data.map(x=>"INSERT INTO badges (twitch_user_id, badge_date, badge_time, status) VALUES ("+[esc(x.id),esc(x.date),esc(x.time),"'recorded'"].join(', ')+");");
   const sql=[
    '-- Badgeuse du Labo — import historique 08–11/11/2026',
+   '-- D1 applique les fichiers SQL de façon transactionnelle : ne pas ajouter BEGIN/COMMIT.',
    '-- Vérifier la requête de précontrôle D1 avant exécution.',
-   'BEGIN TRANSACTION;',
    ...deletes,
    ...inserts,
-   'COMMIT;',
    '',
    '-- Contrôle après import : total attendu = '+data.length,
    "SELECT COUNT(*) AS total_importe FROM badges WHERE badge_date BETWEEN '2026-11-08' AND '2026-11-11' AND status = 'recorded';",
