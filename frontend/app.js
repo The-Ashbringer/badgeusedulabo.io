@@ -50,6 +50,8 @@ const elements = {
 const state = {
     user: null,
     alreadyBadged: false,
+    pending: false,
+    plannedToday: true,
     isLoading: false,
     isBadging: false
 };
@@ -240,6 +242,8 @@ async function checkSession() {
         displayUser(data.user);
 
         state.alreadyBadged = Boolean(data.alreadyBadged);
+        state.pending = Boolean(data.pending);
+        state.plannedToday = Boolean(data.plannedToday);
 
         if (state.alreadyBadged) {
             setBadgeStatus(
@@ -249,6 +253,21 @@ async function checkSession() {
 
             elements.badgeButton.disabled = true;
             elements.badgeButton.textContent = "Déjà badgé ✓";
+        } else if (state.pending) {
+            setBadgeStatus(
+                "Ton badgeage est en cours de synchronisation.",
+                "pending"
+            );
+
+            elements.badgeButton.disabled = true;
+            elements.badgeButton.textContent = "Enregistrement...";
+        } else if (!state.plannedToday) {
+            setBadgeStatus(
+                "Aucun badgeage n'est prévu aujourd'hui."
+            );
+
+            elements.badgeButton.disabled = true;
+            elements.badgeButton.textContent = "Journée fermée";
         } else {
             setBadgeStatus(
                 "Tu n'as pas encore badgé aujourd'hui."
@@ -322,7 +341,7 @@ async function submitBadge() {
     } catch (error) {
         console.error("Erreur de pointage :", error);
 
-        if (error.status === 409) {
+        if (error.code === "ALREADY_BADGED") {
             state.alreadyBadged = true;
 
             setBadgeStatus(
@@ -336,6 +355,31 @@ async function submitBadge() {
                 "Un pointage existe déjà pour aujourd'hui.",
                 "success"
             );
+
+        } else if (error.code === "BADGE_PENDING") {
+            state.pending = true;
+
+            setBadgeStatus(
+                "Ton badgeage est en cours de synchronisation.",
+                "pending"
+            );
+
+            elements.badgeButton.disabled = true;
+            elements.badgeButton.textContent = "Enregistrement...";
+
+            showFeedback(
+                "Ton pointage est en cours de traitement. Actualise la page dans quelques instants.",
+                "info"
+            );
+
+        } else if (error.code === "BADGE_DAY_NOT_AVAILABLE") {
+            state.plannedToday = false;
+
+            setBadgeStatus("Aucun badgeage n'est prévu aujourd'hui.");
+            elements.badgeButton.disabled = true;
+            elements.badgeButton.textContent = "Journée fermée";
+
+            showFeedback("Le badgeage n'est pas ouvert aujourd'hui.", "info");
 
         } else {
             elements.badgeButton.disabled = false;
