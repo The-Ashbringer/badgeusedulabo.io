@@ -525,120 +525,167 @@ function buildGrid(planning, users, badgeMap) {
    SYNCHRONISATION DE LA GRILLE
 ===================================================== */
 
-export async function syncBadgeuse(env) {
-  const badgeuseTab = getTabName(
-    env,
-    "SHEET_TAB",
-    DEFAULT_BADGEUSE_TAB
-  );
-
-  const planning = await getPlanning(env);
-
-  const sheetId = await getSheetId(
-    badgeuseTab,
-    env
-  );
-
-  const sheets = await getSheetMetadata(env);
-
-  const sheet = sheets.find(
-    item => item.properties.sheetId === sheetId
-  );
-
-  const currentRows =
-    sheet.properties.gridProperties.rowCount;
-
-  const currentColumns =
-    sheet.properties.gridProperties.columnCount;
-
-  const { users, badgeMap } = await getGridData(
-    env,
-    planning
-  );
-
-  const grid = buildGrid(
-    planning,
-    users,
-    badgeMap
-  );
-
-  const requiredRows = Math.max(
-    currentRows,
-    users.length + 2
-  );
-
-  // La grille utilise A:O au maximum (pseudo + 14 jours).
-  // Les éventuelles colonnes au-delà de O sont conservées.
-  const requiredColumns = Math.max(currentColumns, 15);
-
-  const requests = [];
-
-  // Extension automatique de la grille si nécessaire.
-  if (
-    requiredRows !== currentRows ||
-    requiredColumns !== currentColumns
-  ) {
-    requests.push({
-      updateSheetProperties: {
-        properties: {
-          sheetId,
-          gridProperties: {
-            rowCount: requiredRows,
-            columnCount: requiredColumns
-          }
-        },
-        fields: "gridProperties.rowCount,gridProperties.columnCount"
-      }
-    });
+export async function syncBadgeuse(env, targetUserId = null) {
+  if (!env.DB) {
+    throw new Error("D1_DATABASE_MISSING");
   }
 
-  // Effacement des anciennes valeurs de la grille,
-  // sans toucher aux formats ni au titre de la ligne 1.
-  requests.push({
-    updateCells: {
-      range: {
-        sheetId,
-        startRowIndex: 1,
-        endRowIndex: requiredRows,
-        startColumnIndex: 0,
-        endColumnIndex: 15
-      },
-      fields: "userEnteredValue"
+  // Verrou D1 : une seule reconstruction complète de la grille à la fois.
+  const lockToken = crypto.randomUUID();
+  const lockExpiresAt = Math.floor(Date.now() / 1000) + 300;
+  let acquired = false;
+
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const lock = await env.DB.prepare(`
+      INSERT INTO sync_locks (lock_name, lock_token, expires_at)
+      VALUES ('badgeuse_grid', ?, ?)
+      ON CONFLICT(lock_name) DO UPDATE SET
+        lock_token = excluded.lock_token,
+        expires_at = excluded.expires_at
+      WHERE sync_locks.expires_at <= ?
+      RETURNING lock_token
+    `).bind(
+      lockToken,
+      lockExpiresAt,
+      Math.floor(Date.now() / 1000)
+    ).first();
+
+    if (lock?.lock_token === lockToken) {
+      acquired = true;
+      break;
     }
-  });
 
-  // Réécriture des en-têtes et utilisateurs.
-  requests.push({
-    updateCells: {
-      start: {
-        sheetId,
-        rowIndex: 1,
-        columnIndex: 0
-      },
-      rows: grid.map(row => ({
-        values: row.map(value => ({
-          userEnteredValue: {
-            stringValue: String(value)
-          }
-        }))
-      })),
-      fields: "userEnteredValue"
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+
+  if (!acquired) {
+    throw new Error("SHEET_SYNC_BUSY");
+  }
+
+  try {
+    const badgeuseTab = getTabName(
+      env,
+      "SHEET_TAB",
+      DEFAULT_BADGEUSE_TAB
+    );
+
+    const planning = await getPlanning(env);
+
+    const sheetId = await getSheetId(
+      badgeuseTab,
+      env
+    );
+
+    const sheets = await getSheetMetadata(env);
+
+    const sheet = sheets.find(
+      item => item.properties.sheetId === sheetId
+    );
+
+    const currentRows =
+      sheet.properties.gridProperties.rowCount;
+
+    const currentColumns =
+      sheet.properties.gridProperties.columnCount;
+
+    const { users, badgeMap } = await getGridData(
+      env,
+      planning
+    );
+
+    const grid = buildGrid(
+      planning,
+      users,
+      badgeMap
+    );
+
+    const requiredRows = Math.max(
+      currentRows,
+      users.length + 2
+    );
+
+    // La grille utilise A:O au maximum (pseudo + 14 jours).
+    // Les éventuelles colonnes au-delà de O sont conservées.
+    const requiredColumns = Math.max(currentColumns, 15);
+
+    const requests = [];
+
+    if (
+      requiredRows !== currentRows ||
+      requiredColumns !== currentColumns
+    ) {
+      requests.push({
+        updateSheetProperties: {
+          properties: {
+            sheetId,
+            gridProperties: {
+              rowCount: requiredRows,
+              columnCount: requiredColumns
+            }
+          },
+          fields: "gridProperties.rowCount,gridProperties.columnCount"
+        }
+      });
     }
-  });
 
-  await googleRequest(":batchUpdate", env, {
-    method: "POST",
-    body: JSON.stringify({
-      requests
-    })
-  });
+    requests.push({
+      updateCells: {
+        range: {
+          sheetId,
+          startRowIndex: 1,
+          endRowIndex: requiredRows,
+          startColumnIndex: 0,
+          endColumnIndex: 15
+        },
+        fields: "userEnteredValue"
+      }
+    });
 
-  return {
-    success: true,
-    usersCount: users.length,
-    datesCount: planning.dates.length,
-    sheetId
-  };
+    requests.push({
+      updateCells: {
+        start: {
+          sheetId,
+          rowIndex: 1,
+          columnIndex: 0
+        },
+        rows: grid.map(row => ({
+          values: row.map(value => ({
+            userEnteredValue: {
+              stringValue: String(value)
+            }
+          }))
+        })),
+        fields: "userEnteredValue"
+      }
+    });
+
+    await googleRequest(":batchUpdate", env, {
+      method: "POST",
+      body: JSON.stringify({ requests })
+    });
+
+    const targetIndex = targetUserId == null
+      ? -1
+      : users.findIndex(user => user.twitch_user_id === String(targetUserId));
+
+    return {
+      success: true,
+      usersCount: users.length,
+      datesCount: planning.dates.length,
+      sheetId,
+      ...(targetUserId == null ? {} : {
+        sheetRow: targetIndex === -1 ? null : targetIndex + 3
+      })
+    };
+  } finally {
+    // Libération conditionnelle : ne jamais supprimer le verrou
+    // éventuellement repris après expiration par une autre requête.
+    await env.DB.prepare(`
+      DELETE FROM sync_locks
+      WHERE lock_name = 'badgeuse_grid'
+        AND lock_token = ?
+    `).bind(lockToken).run();
+  }
 }
 
 /* =====================================================
@@ -679,15 +726,9 @@ export async function recordBadge(
     throw new Error("BADGE_NOT_FOUND_IN_DATABASE");
   }
 
-  const syncResult = await syncBadgeuse(env);
+  const syncResult = await syncBadgeuse(env, userId);
 
-  const { users } = await getGridData(env, planning);
-
-  const userIndex = users.findIndex(
-    user => user.twitch_user_id === String(userId)
-  );
-
-  if (userIndex === -1) {
+  if (!syncResult.sheetRow) {
     throw new Error("BADGE_USER_NOT_FOUND");
   }
 
