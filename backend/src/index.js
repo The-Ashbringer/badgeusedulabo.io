@@ -16,7 +16,8 @@ import {
 
 import {
   getPlanning,
-  recordBadge
+  recordBadge,
+  syncBadgeuse
 } from "./google-sheets.js";
 
 import {
@@ -175,6 +176,22 @@ export default {
 
         const results = await lookupLegacyTwitchAccounts(body.names, env);
         return jsonResponse({ results }, 200, corsHeaders);
+      }
+
+      if (url.pathname === "/api/admin/sync-grid" && request.method === "POST") {
+        const session = await getSession(request, env);
+        if (!session) return errorResponse("UNAUTHORIZED", 401, corsHeaders);
+
+        // Reconstruction de la grille réservée au compte administrateur.
+        if (!env.TWITCH_ADMIN_LOGIN ||
+            session.login.toLowerCase() !== env.TWITCH_ADMIN_LOGIN.toLowerCase()) {
+          return errorResponse("FORBIDDEN", 403, corsHeaders);
+        }
+
+        // Synchronise uniquement l'onglet BADGEUSE à partir des données D1.
+        // Aucun badge n'est créé et l'onglet CONFIG n'est jamais modifié.
+        const result = await syncBadgeuse(env);
+        return jsonResponse(result, 200, corsHeaders);
       }
 
       if (url.pathname === "/api/me" && request.method === "GET") {
